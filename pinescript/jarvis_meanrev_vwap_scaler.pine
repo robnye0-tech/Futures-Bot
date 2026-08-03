@@ -10,13 +10,19 @@
 // 1-minute lead, which failed to hold up under a larger sample). Best
 // tested on a 5-minute MNQ/MES chart to start - see repo README.
 //
-// Also includes a toggleable trend-alignment filter: a real TradingView
-// test (MES 15m, Mar-Aug 2026, during a known NQ downtrend) showed longs
-// losing (PF 0.43) while shorts worked (PF 1.24) - i.e. the side fighting
-// the trend lost, the side aligned with it won. The filter blocks longs
-// below a longer EMA and shorts above it, so it should adapt if the trend
-// reverses rather than being a permanent one-sided bet. Test WITH and
-// WITHOUT it on the same chart/window to see if it actually helps here.
+// Also includes toggleable trend-alignment (EMA-based) and OBV
+// volume-trend confirmation filters, both OFF by default. They were
+// motivated by a real long/short asymmetry seen on MES 15m during a
+// known NQ downtrend, but extensive walk-forward testing (both
+// backtest_optimizer.py's expanded grid search AND manual TradingView
+// neighborhood checks) never found either filter improving results -
+// the unfiltered baseline kept winning every time, across every
+// symbol/timeframe tested. Left in as optional toggles for further
+// experimentation, but off by default since they didn't hold up.
+//
+// Commission ($1/contract) and slippage (2 ticks) are baked directly
+// into the strategy() declaration below, so they apply automatically -
+// no need to re-enter them in Properties every time the script reloads.
 //
 // This strategy is meant to be run on a TradingView chart (load MNQ1! or
 // MES1! continuous futures), with its order-fill alerts wired to
@@ -32,7 +38,10 @@ strategy("Jarvis VWAP Mean-Reversion Scaler - MNQ/MES",
      default_qty_value = 3,
      pyramiding = 10,
      calc_on_every_tick = false,
-     process_orders_on_close = true)
+     process_orders_on_close = true,
+     commission_type = strategy.commission.cash_per_contract,
+     commission_value = 1,
+     slippage = 2)
 
 // ---------------------------------------------------------------------
 // Inputs — defaults match the best walk-forward-tested MES 5m candidate
@@ -63,10 +72,10 @@ sessionEndMin    = input.int(0, "Session End Minute (ET)")
 
 dailyKillUSD = input.float(900, "Daily Kill Switch ($) - placeholder, confirm real Tradeify drawdown figure")
 
-useTrendAlignment = input.bool(true, "Use Trend Alignment Filter (don't fight the broader trend)")
+useTrendAlignment = input.bool(false, "Use Trend Alignment Filter (don't fight the broader trend)")
 trendLen          = input.int(100, "Trend Alignment EMA Length")
 
-useObvConfirm = input.bool(true, "Use OBV Volume-Trend Confirmation")
+useObvConfirm = input.bool(false, "Use OBV Volume-Trend Confirmation")
 obvLookback   = input.int(20, "OBV Lookback (bars)")
 
 // ---------------------------------------------------------------------

@@ -115,9 +115,13 @@ MEANREV_DEFAULTS = {**SHARED_DEFAULTS, **dict(
     adx_len=14, adx_threshold=20,   # note: LOW adx = range-bound = the condition we want here
     target_fraction_1=0.5,          # halfway back to VWAP
     target_fraction_2=1.0,          # full VWAP touch
-    use_trend_alignment=True,       # only trade mean-reversion WITH/neutral to the broader trend
+    # Both off by default - extensive walk-forward testing never found
+    # either filter improving results; the unfiltered baseline won every
+    # time, across every symbol/timeframe tested. Still grid-searched
+    # (see MEANREV_GRID) in case that changes with new data.
+    use_trend_alignment=False,
     trend_len=100,
-    use_obv_confirm=True,           # require OBV (volume) to agree with the trend direction too
+    use_obv_confirm=False,
     obv_lookback=20,
 )}
 
