@@ -22,10 +22,20 @@ As a result, this repo now has two parts:
    feed pieces are still useful, but `strategy.py` **cannot place live
    trades on a Sim Funded account** and should not be run expecting it to.
 
+### Which Pine Script to use
+
+- **`jarvis_orb_vwap_scaler.pine`** — **current candidate.** Opening Range
+  Breakout + VWAP confluence + volume + ADX momentum filter. Plots the OR
+  high/low directly on the chart as a visual reference.
+- `jarvis_mnq_mes_scaler.pine` — EMA crossover version. Walk-forward tested
+  (see `backtest_optimizer.py` and the "Open items" section) and found to
+  have **no real out-of-sample edge** on MNQ/MES. Kept for reference only —
+  do not use this one going forward.
+
 ## Active setup: Pine Script + TradingView + PickMyTrade
 
 1. Open TradingView, load an **MNQ1!** or **MES1!** continuous futures chart.
-2. Open Pine Editor, paste in `pinescript/jarvis_mnq_mes_scaler.pine`, and
+2. Open Pine Editor, paste in `pinescript/jarvis_orb_vwap_scaler.pine`, and
    add it to the chart as a strategy.
 3. Adjust the inputs in the strategy settings if needed (they mirror the
    constants that were in `config.py`) — position sizing, ATR multiples,
@@ -57,19 +67,25 @@ python backtest_optimizer.py
 ```
 
 What it does:
-1. Pulls free historical MNQ/MES data (30-min bars: ~60 days available;
-   60-min bars: up to ~2 years — Yahoo's own limits, not something we can
-   change without a paid data source).
+1. Pulls free historical MNQ/MES data (1-min bars: ~7 days available;
+   5-min/15-min bars: ~60 days; 60-min bars: up to ~2 years — Yahoo's own
+   limits, not something we can change without a paid data source).
 2. Splits it chronologically: first 70% = in-sample (used for search),
    last 30% = out-of-sample (never touched during search).
 3. Grid-searches a modest parameter set on in-sample data only, and scores
-   EMA pairs by how consistently they perform across different stop/filter
+   candidates by how consistently they perform across different stop/filter
    settings (robust), not just whichever single combo peaked highest
    (likely overfit).
 4. Takes the most robust candidate(s) and runs each ONCE, unchanged, on
    the out-of-sample data. **That out-of-sample number is the one to
    trust** — if profit factor holds above 1.0 there, it's a real signal;
    if it collapses, the in-sample result was noise.
+
+It supports two strategy families (`crossover` and `orb`, see
+`STRATEGIES` dict in the script) — `orb` (Opening Range Breakout + VWAP +
+ADX) is the current candidate and what `main()` runs by default. The
+crossover version is kept only for reference/comparison; it's already
+been tested and shown to lack real edge.
 
 This is a research tool, not a byte-for-byte replica of TradingView's
 fill accounting — use it to narrow down promising parameter zones fast,
@@ -79,11 +95,17 @@ data comes in rather than hand-tweaking parameters against whatever the
 last TradingView screenshot happened to show — repeatedly tuning against
 the same window is how you accidentally curve-fit without meaning to.
 
-## How the strategy logic works
+## How the strategy logic works (jarvis_orb_vwap_scaler.pine)
 
-- **Entry signal**: EMA(9)/EMA(21) crossover, only acted on if current
-  volume exceeds 1.5x its 20-bar average (momentum + volume confirmation,
-  both long and short).
+- **Opening Range**: tracks the high/low of the first N minutes of the
+  session (15 min by default), plotted on the chart as step-lines so you
+  can see it directly, plus a shaded background during the OR formation
+  window.
+- **Entry signal**: a close breaking above the OR high (long) or below
+  the OR low (short), confirmed by VWAP confluence (price must also be on
+  the correct side of VWAP), volume exceeding 1.5x its 20-bar average,
+  and ADX above a threshold (momentum/trend-strength — filters out weak,
+  choppy breakouts).
 - **Scale in**: adds to a winning position (up to a per-symbol cap) only
   when price continues moving favorably by a full ATR with volume still
   confirming. Never adds to a loser.
@@ -93,27 +115,30 @@ the same window is how you accidentally curve-fit without meaning to.
 - **Daily kill switch**: flattens all positions and halts new entries once
   the day's cumulative loss hits a configured threshold — a safety buffer
   *below* Tradeify's actual daily loss limit, not the limit itself.
-- **Session filter**: only enters new trades 9:30 AM–4:00 PM ET by default
-  (stops/exits remain active at all times for safety).
+- **Session filter**: only enters new trades 9:30 AM–4:00 PM ET by default,
+  and only after the opening range window has closed (stops/exits remain
+  active at all times for safety).
 - **On-chart status table**: shows daily P&L, kill switch state, current
-  position, session status, and stop price directly on the TradingView
-  chart.
+  position, session status, OR high/low, ADX, and stop price directly on
+  the TradingView chart.
 
 ## Project structure
 
 ```
 pinescript/
-  jarvis_mnq_mes_scaler.pine   # ACTIVE strategy - runs on TradingView
+  jarvis_orb_vwap_scaler.pine   # ACTIVE strategy - runs on TradingView
+  jarvis_mnq_mes_scaler.pine    # EMA crossover - reference only, no edge found
 
-strategy.py         # original Python/Lumibot version - reference only,
-                     # cannot place live trades on a Sim Funded account
-config.py            # constants for the Python version
-shared_state.py       # file-based state store (Python version)
-news_feed.py           # Alpha Vantage news fetcher
-dashboard.py             # Flask dashboard (Python version)
-templates/                 # dashboard HTML templates
-test_connection.py           # Tradovate direct-API test - only relevant
-                              # if you later upgrade to a Live Funded account
+backtest_optimizer.py  # walk-forward parameter search - run locally
+strategy.py          # original Python/Lumibot version - reference only,
+                      # cannot place live trades on a Sim Funded account
+config.py             # constants for the Python version
+shared_state.py        # file-based state store (Python version)
+news_feed.py            # Alpha Vantage news fetcher
+dashboard.py              # Flask dashboard (Python version)
+templates/                  # dashboard HTML templates
+test_connection.py            # Tradovate direct-API test - only relevant
+                               # if you later upgrade to a Live Funded account
 ```
 
 ## Open items
