@@ -1,0 +1,223 @@
+// @version=6
+// Jarvis VWAP Mean-Reversion Scale-In-Out Strategy — MNQ / MES
+//
+// Fades price back toward VWAP when stretched beyond a volatility-based
+// band, but only when ADX confirms range-bound conditions (the INVERSE
+// filter from the ORB script, which wanted trending conditions). Walk-
+// forward tested via backtest_optimizer.py - the standout result was
+// MES on a 5-minute chart, consistent across multiple band widths with
+// real sample sizes (not a small-sample fluke like the earlier ORB
+// 1-minute lead, which failed to hold up under a larger sample). Best
+// tested on a 5-minute MNQ/MES chart to start - see repo README.
+//
+// This strategy is meant to be run on a TradingView chart (load MNQ1! or
+// MES1! continuous futures), with its order-fill alerts wired to
+// PickMyTrade (or a similar bridge) to execute on your Tradeify account.
+//
+// Do NOT hand-write the webhook JSON yourself — use PickMyTrade's own
+// alert JSON generator in their dashboard and paste that into the
+// TradingView alert message box. See README for the full setup steps.
+
+strategy("Jarvis VWAP Mean-Reversion Scaler - MNQ/MES",
+     overlay = true,
+     default_qty_type = strategy.fixed,
+     default_qty_value = 3,
+     pyramiding = 10,
+     calc_on_every_tick = false,
+     process_orders_on_close = true)
+
+// ---------------------------------------------------------------------
+// Inputs — defaults match the best walk-forward-tested MES 5m candidate
+// ---------------------------------------------------------------------
+vwapBandMult = input.float(2.0, "VWAP Band Multiple (x ATR)")
+
+atrLen  = input.int(14, "ATR Length")
+volLen  = input.int(20, "Volume Avg Length")
+volMult = input.float(1.5, "Volume Multiplier")
+
+adxLen       = input.int(14, "ADX Length")
+adxThreshold = input.float(20, "ADX Threshold (trade only BELOW this - range-bound)")
+
+baseSize = input.int(3, "Base Size (contracts)")
+addSize  = input.int(3, "Scale-In Add Size")
+maxSize  = input.int(9, "Max Position Size (contracts)")
+
+stopAtrMult    = input.float(1.5, "Stop ATR Multiple (beyond entry)")
+scaleInAtrMult = input.float(1.0, "Scale-In ATR Multiple")
+
+targetFraction1 = input.float(0.5, "Target 1 - Fraction of Distance Back to VWAP")
+targetFraction2 = input.float(1.0, "Target 2 - Fraction of Distance Back to VWAP (1.0 = full touch)")
+
+sessionStartHour = input.int(9, "Session Start Hour (ET)")
+sessionStartMin  = input.int(30, "Session Start Minute (ET)")
+sessionEndHour   = input.int(16, "Session End Hour (ET)")
+sessionEndMin    = input.int(0, "Session End Minute (ET)")
+
+dailyKillUSD = input.float(900, "Daily Kill Switch ($) - placeholder, confirm real Tradeify drawdown figure")
+
+// ---------------------------------------------------------------------
+// Session helpers (ET) - plain minute-of-day arithmetic
+// ---------------------------------------------------------------------
+etHour   = hour(time, "America/New_York")
+etMinute = minute(time, "America/New_York")
+etDay    = dayofmonth(time, "America/New_York")
+
+nowMinutes          = etHour * 60 + etMinute
+sessionStartMinutes = sessionStartHour * 60 + sessionStartMin
+sessionEndMinutes   = sessionEndHour * 60 + sessionEndMin
+inSession = nowMinutes >= sessionStartMinutes and nowMinutes <= sessionEndMinutes
+
+newDay = ta.change(etDay) != 0
+
+// ---------------------------------------------------------------------
+// Indicators
+// ---------------------------------------------------------------------
+atrVal = ta.atr(atrLen)
+avgVol = ta.sma(volume, volLen)
+volConfirmed = volume > (avgVol * volMult)
+
+vwapValue = ta.vwap(hlc3)
+[diPlus, diMinus, adxValue] = ta.dmi(adxLen, adxLen)
+rangeBound = adxValue < adxThreshold
+
+upperBand = vwapValue + atrVal * vwapBandMult
+lowerBand = vwapValue - atrVal * vwapBandMult
+
+plot(vwapValue, "VWAP", color = color.yellow, linewidth = 2)
+plot(upperBand, "Upper Band", color = color.new(color.red, 40))
+plot(lowerBand, "Lower Band", color = color.new(color.lime, 40))
+
+// ---------------------------------------------------------------------
+// Daily kill switch
+// ---------------------------------------------------------------------
+var float dayStartEquity = na
+var bool  dailyHalted = false
+
+if newDay
+    dayStartEquity := strategy.equity
+    dailyHalted := false
+
+dailyPnl = na(dayStartEquity) ? 0.0 : strategy.equity - dayStartEquity
+
+if dailyPnl <= -dailyKillUSD and not dailyHalted
+    strategy.close_all(comment = "DAILY KILL SWITCH")
+    dailyHalted := true
+
+canTrade = inSession and not dailyHalted
+
+// ---------------------------------------------------------------------
+// Per-position state (reset whenever flat)
+// ---------------------------------------------------------------------
+var float lastScalePrice = na
+var float stopPrice = na
+var float entryPrice = na
+var float entryVwap = na
+var bool  target1Hit = false
+var bool  target2Hit = false
+
+if strategy.position_size == 0
+    lastScalePrice := na
+    stopPrice := na
+    entryPrice := na
+    entryVwap := na
+    target1Hit := false
+    target2Hit := false
+
+// ---------------------------------------------------------------------
+// Entries — fade the extreme, only in range-bound conditions
+// ---------------------------------------------------------------------
+enterLong  = canTrade and rangeBound and volConfirmed and close <= lowerBand and strategy.position_size == 0
+enterShort = canTrade and rangeBound and volConfirmed and close >= upperBand and strategy.position_size == 0
+
+if enterLong
+    strategy.entry("Long", strategy.long, qty = baseSize, comment = "MEANREV LONG")
+    lastScalePrice := close
+    entryPrice := close
+    entryVwap := vwapValue
+    stopPrice := close - atrVal * stopAtrMult
+
+if enterShort
+    strategy.entry("Short", strategy.short, qty = baseSize, comment = "MEANREV SHORT")
+    lastScalePrice := close
+    entryPrice := close
+    entryVwap := vwapValue
+    stopPrice := close + atrVal * stopAtrMult
+
+// ---------------------------------------------------------------------
+// Scale in — only once price is already moving back toward VWAP
+// (confirmed reversion), never while it keeps extending away
+// ---------------------------------------------------------------------
+longFavorable  = strategy.position_size > 0 ? close - lastScalePrice : na
+shortFavorable = strategy.position_size < 0 ? lastScalePrice - close : na
+
+canScaleInLong  = canTrade and strategy.position_size > 0 and strategy.position_size < maxSize and
+     not na(longFavorable) and longFavorable >= atrVal * scaleInAtrMult and volConfirmed
+canScaleInShort = canTrade and strategy.position_size < 0 and math.abs(strategy.position_size) < maxSize and
+     not na(shortFavorable) and shortFavorable >= atrVal * scaleInAtrMult and volConfirmed
+
+if canScaleInLong
+    strategy.entry("Long", strategy.long, qty = addSize, comment = "SCALE IN")
+    lastScalePrice := close
+
+if canScaleInShort
+    strategy.entry("Short", strategy.short, qty = addSize, comment = "SCALE IN")
+    lastScalePrice := close
+
+// ---------------------------------------------------------------------
+// Stop loss (always active, regardless of session, for safety)
+// ---------------------------------------------------------------------
+if strategy.position_size > 0 and close <= stopPrice
+    strategy.close("Long", comment = "STOP")
+
+if strategy.position_size < 0 and close >= stopPrice
+    strategy.close("Short", comment = "STOP")
+
+// ---------------------------------------------------------------------
+// Targets — relative to VWAP distance AT ENTRY, not open-ended ATR
+// extensions, since the thesis is reversion to the mean, not momentum
+// ---------------------------------------------------------------------
+longDistance  = entryVwap - entryPrice
+shortDistance = entryPrice - entryVwap
+
+target1Long  = entryPrice + longDistance * targetFraction1
+target2Long  = entryPrice + longDistance * targetFraction2
+target1Short = entryPrice - shortDistance * targetFraction1
+target2Short = entryPrice - shortDistance * targetFraction2
+
+if strategy.position_size > 0 and not target2Hit and close >= target2Long
+    strategy.close("Long", comment = "TARGET 2 (VWAP)")
+    target2Hit := true
+else if strategy.position_size > 0 and not target1Hit and close >= target1Long
+    strategy.close("Long", qty_percent = 50, comment = "TARGET 1")
+    target1Hit := true
+
+if strategy.position_size < 0 and not target2Hit and close <= target2Short
+    strategy.close("Short", comment = "TARGET 2 (VWAP)")
+    target2Hit := true
+else if strategy.position_size < 0 and not target1Hit and close <= target1Short
+    strategy.close("Short", qty_percent = 50, comment = "TARGET 1")
+    target1Hit := true
+
+// ---------------------------------------------------------------------
+// On-chart status table
+// ---------------------------------------------------------------------
+var table statusTable = table.new(position.top_right, 2, 7, border_width = 1)
+if barstate.islast
+    table.cell(statusTable, 0, 0, "Daily P&L", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 0, str.tostring(dailyPnl, "#.##"), bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 1, "Kill Switch", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 1, dailyHalted ? "HALTED" : "Active",
+         bgcolor = color.gray, text_color = dailyHalted ? color.red : color.green)
+    table.cell(statusTable, 0, 2, "Position", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 2, str.tostring(strategy.position_size), bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 3, "In Session", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 3, inSession ? "Yes" : "No", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 4, "Range-Bound (ADX)", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 4, str.tostring(adxValue, "#.##") + (rangeBound ? " (Yes)" : " (No)"),
+         bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 5, "VWAP Band", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 5, str.tostring(lowerBand, "#.##") + " / " + str.tostring(upperBand, "#.##"),
+         bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 6, "Stop Price", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 6, na(stopPrice) ? "—" : str.tostring(stopPrice, "#.##"),
+         bgcolor = color.gray, text_color = color.white)
