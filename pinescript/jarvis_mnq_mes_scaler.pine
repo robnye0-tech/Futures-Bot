@@ -43,22 +43,32 @@ dailyKillUSD   = input.float(900, "Daily Kill Switch ($) - placeholder, confirm 
 
 sessionStr     = input.session("0930-1600", "Trading Session (ET)")
 
+useTrendFilter = input.bool(true, "Use Trend Filter")
+trendLen       = input.int(200, "Trend Filter EMA Length")
+
 // ---------------------------------------------------------------------
 // Indicators
 // ---------------------------------------------------------------------
 emaFast = ta.ema(close, fastLen)
 emaSlow = ta.ema(close, slowLen)
+trendEma = ta.ema(close, trendLen)
 atrVal  = ta.atr(atrLen)
 avgVol  = ta.sma(volume, volLen)
 volConfirmed = volume > (avgVol * volMult)
 
-crossUp   = ta.crossover(emaFast, emaSlow) and volConfirmed
-crossDown = ta.crossunder(emaFast, emaSlow) and volConfirmed
+trendUp   = close > trendEma
+trendDown = close < trendEma
+
+// Trend filter only restricts NEW entries, not scale-ins/exits, so an
+// already-open position isn't affected mid-trend-change.
+crossUp   = ta.crossover(emaFast, emaSlow) and volConfirmed and (not useTrendFilter or trendUp)
+crossDown = ta.crossunder(emaFast, emaSlow) and volConfirmed and (not useTrendFilter or trendDown)
 
 inSession = not na(time(timeframe.period, sessionStr, "America/New_York"))
 
 plot(emaFast, "EMA Fast", color = color.blue)
 plot(emaSlow, "EMA Slow", color = color.orange)
+plot(useTrendFilter ? trendEma : na, "Trend Filter EMA", color = color.purple, linewidth = 2)
 
 // ---------------------------------------------------------------------
 // Daily kill switch
