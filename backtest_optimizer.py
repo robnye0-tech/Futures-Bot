@@ -48,6 +48,8 @@ YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 # Yahoo's own limits per interval - requesting more than this just gets
 # silently clamped, so these are the real ceilings on sample size.
 INTERVAL_MAX_RANGE = {
+    "1m": "7d",
+    "5m": "60d",
     "15m": "60d",
     "30m": "60d",
     "60m": "730d",
@@ -87,7 +89,7 @@ CROSSOVER_GRID = dict(
 )
 
 ORB_GRID = dict(
-    or_minutes=[15, 30, 60],
+    or_minutes=[15],  # locked to 15 min per your traded setup
     adx_threshold=[15, 20, 25],
     stop_atr_mult=[1.2, 1.5, 1.8],
     use_vwap_filter=[True, False],
@@ -461,7 +463,7 @@ def run_backtest_orb(bars, symbol, params):
 
 STRATEGIES = {
     "crossover": dict(run=run_backtest_crossover, grid=CROSSOVER_GRID, group_by=("fast_len", "slow_len")),
-    "orb": dict(run=run_backtest_orb, grid=ORB_GRID, group_by=("or_minutes",)),
+    "orb": dict(run=run_backtest_orb, grid=ORB_GRID, group_by=("adx_threshold",)),
 }
 
 
@@ -552,7 +554,7 @@ def run_for(symbol, interval, strategy_name):
 
 def main():
     for symbol in ["MNQ=F", "MES=F"]:
-        for interval in ["15m", "30m", "60m"]:
+        for interval in ["1m", "5m", "15m"]:
             run_for(symbol, interval, "orb")
 
 
