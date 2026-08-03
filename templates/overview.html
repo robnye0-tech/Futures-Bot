@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% set pnl = state.daily_pnl %}
+<div class="grid">
+  <div class="card">
+    <div class="label">Portfolio Value</div>
+    <div class="value">{{ "$%.2f"|format(state.portfolio_value) if state.portfolio_value is not none else "—" }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Today's P&amp;L</div>
+    <div class="value {{ 'positive' if pnl is not none and pnl >= 0 else 'negative' if pnl is not none else '' }}">
+      {{ "$%.2f"|format(pnl) if pnl is not none else "—" }}
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">Trading Day</div>
+    <div class="value">{{ state.trading_day or "—" }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Daily Kill Switch</div>
+    <div class="value {{ 'halted' if state.daily_halted else '' }}">
+      {{ "HALTED" if state.daily_halted else "Active" }}
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="label">Open Positions</div>
+  {% set open_positions = state.positions.items()|selectattr("1.direction")|list %}
+  {% if open_positions %}
+    <table style="margin-top:10px;">
+      <tr><th>Symbol</th><th>Direction</th><th>Size</th><th>Stop</th></tr>
+      {% for symbol, pos in open_positions %}
+      <tr>
+        <td>{{ symbol }}</td>
+        <td><span class="badge {{ pos.direction }}">{{ pos.direction|upper }}</span></td>
+        <td>{{ pos.size }}</td>
+        <td>{{ "%.2f"|format(pos.stop_price) if pos.stop_price else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="empty">No open positions right now.</div>
+  {% endif %}
+</div>
+
+{% endblock %}

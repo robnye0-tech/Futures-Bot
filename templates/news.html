@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="status" style="margin-bottom:16px;">
+  News last fetched: {{ state.news_last_fetched or "never" }}
+  (refreshes automatically while the strategy is running; requires ALPHAVANTAGE_API_KEY in .env)
+</div>
+
+{% if state.news %}
+  <div class="card">
+  {% for item in state.news %}
+    <div class="news-item">
+      <a class="headline" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+      <div class="news-meta">
+        {{ item.source }}
+        {% if item.sentiment_label %}
+          &middot; <span class="badge {{ 'bullish' if 'Bullish' in item.sentiment_label else 'bearish' if 'Bearish' in item.sentiment_label else 'neutral' }}">{{ item.sentiment_label }}</span>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+{% else %}
+  <div class="empty">No news loaded yet. Make sure ALPHAVANTAGE_API_KEY is set in .env and the strategy is running.</div>
+{% endif %}
+
+{% endblock %}

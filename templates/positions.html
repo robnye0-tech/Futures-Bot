@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if state.positions %}
+  {% for symbol, pos in state.positions.items() %}
+  <div class="card" style="margin-bottom:12px;">
+    <div class="label">{{ symbol }}</div>
+    {% if pos.direction %}
+      <table style="margin-top:10px;">
+        <tr><th>Direction</th><td><span class="badge {{ pos.direction }}">{{ pos.direction|upper }}</span></td></tr>
+        <tr><th>Size</th><td>{{ pos.size }} contracts</td></tr>
+        <tr><th>Stop Price</th><td>{{ "%.2f"|format(pos.stop_price) if pos.stop_price else "—" }}</td></tr>
+        <tr><th>Last Scale/Entry Price</th><td>{{ "%.2f"|format(pos.last_scale_price) if pos.last_scale_price else "—" }}</td></tr>
+        <tr><th>Target 1 Hit</th><td>{{ "Yes" if pos.target_1_hit else "No" }}</td></tr>
+        <tr><th>Target 2 Hit</th><td>{{ "Yes" if pos.target_2_hit else "No" }}</td></tr>
+      </table>
+    {% else %}
+      <div class="empty">Flat — no position.</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">No position data yet — strategy hasn't run an iteration.</div>
+{% endif %}
+
+{% endblock %}

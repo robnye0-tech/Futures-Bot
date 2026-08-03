@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if entries %}
+<table>
+  <tr><th>Time</th><th>Symbol</th><th>Action</th><th>Qty</th><th>Price</th><th>Reason</th></tr>
+  {% for entry in entries %}
+  <tr>
+    <td>{{ entry.timestamp }}</td>
+    <td>{{ entry.symbol }}</td>
+    <td>{{ entry.action }}</td>
+    <td>{{ entry.qty }}</td>
+    <td>{{ "%.2f"|format(entry.price) if entry.price is not none else "—" }}</td>
+    <td>{{ entry.reason }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+  <div class="empty">No trades logged yet.</div>
+{% endif %}
+
+{% endblock %}
