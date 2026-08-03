@@ -15,7 +15,12 @@ strategy. Supports three entry-signal families:
   - "meanrev": VWAP mean-reversion - fades price back toward VWAP when
     stretched (2x ATR band) AND the market is range-bound (ADX below a
     threshold - the inverse condition from ORB's filter). The current
-    candidate approach.
+    candidate approach. Also supports an optional trend-alignment filter
+    (EMA-based) and OBV volume-trend confirmation, both toggleable -
+    stacking both together can over-restrict the sample size (confirmed
+    both on real TradingView data and in this script's own smoke test),
+    so the report compares all four on/off combinations rather than
+    assuming more filters = better.
 
 WHY THIS EXISTS: manually tweaking one parameter at a time in TradingView
 and re-testing against the same window is how you accidentally overfit to
@@ -112,6 +117,8 @@ MEANREV_DEFAULTS = {**SHARED_DEFAULTS, **dict(
     target_fraction_2=1.0,          # full VWAP touch
     use_trend_alignment=True,       # only trade mean-reversion WITH/neutral to the broader trend
     trend_len=100,
+    use_obv_confirm=True,           # require OBV (volume) to agree with the trend direction too
+    obv_lookback=20,
 )}
 
 MEANREV_GRID = dict(
@@ -120,6 +127,7 @@ MEANREV_GRID = dict(
     stop_atr_mult=[1.0, 1.5, 2.0],
     vol_mult=[1.2, 1.5],
     use_trend_alignment=[True, False],
+    use_obv_confirm=[True, False],
 )
 
 
@@ -263,6 +271,21 @@ def vwap_series(bars):
         cum_pv += typical * b["volume"]
         cum_v += b["volume"]
         out.append(cum_pv / cum_v if cum_v > 0 else None)
+    return out
+
+
+def obv_series(bars):
+    """On-Balance Volume - cumulative volume added on up closes, subtracted
+    on down closes. Used as a volume-backed trend confirmation, separate
+    from price alone (does the volume actually support the trend?)."""
+    out = [0.0]
+    obv = 0.0
+    for i in range(1, len(bars)):
+        if bars[i]["close"] > bars[i - 1]["close"]:
+            obv += bars[i]["volume"]
+        elif bars[i]["close"] < bars[i - 1]["close"]:
+            obv -= bars[i]["volume"]
+        out.append(obv)
     return out
 
 
@@ -506,6 +529,7 @@ def run_backtest_meanrev(bars, symbol, params):
     vwap = vwap_series(bars)
     adx = adx_series(bars, p["adx_len"])
     trend_ema = ema_series(closes, p["trend_len"])
+    obv = obv_series(bars)
 
     point_value = POINT_VALUE[symbol]
     slippage_price = TICK_SIZE[symbol] * p["slippage_ticks"]
@@ -522,6 +546,8 @@ def run_backtest_meanrev(bars, symbol, params):
         if atr[i] is None or avg_vol[i] is None or vwap[i] is None or adx[i] is None:
             continue
         if p["use_trend_alignment"] and trend_ema[i] is None:
+            continue
+        if p["use_obv_confirm"] and i < p["obv_lookback"]:
             continue
 
         dt = bars[i]["dt"]
@@ -585,6 +611,16 @@ def run_backtest_meanrev(bars, symbol, params):
         long_trend_ok = (not p["use_trend_alignment"]) or price >= trend_ema[i]
         short_trend_ok = (not p["use_trend_alignment"]) or price <= trend_ema[i]
 
+        # OBV confirmation: is real volume actually backing that trend
+        # direction, not just price drifting on light volume?
+        obv_rising = obv[i] > obv[i - p["obv_lookback"]]
+        obv_falling = obv[i] < obv[i - p["obv_lookback"]]
+        long_obv_ok = (not p["use_obv_confirm"]) or obv_rising
+        short_obv_ok = (not p["use_obv_confirm"]) or obv_falling
+
+        long_trend_ok = long_trend_ok and long_obv_ok
+        short_trend_ok = short_trend_ok and short_obv_ok
+
         if position is None and can_trade and range_bound:
             if price <= lower_band and vol_confirmed and long_trend_ok:
                 fill_price = price + slippage_price
@@ -619,7 +655,7 @@ def run_backtest_meanrev(bars, symbol, params):
 STRATEGIES = {
     "crossover": dict(run=run_backtest_crossover, grid=CROSSOVER_GRID, group_by=("fast_len", "slow_len")),
     "orb": dict(run=run_backtest_orb, grid=ORB_GRID, group_by=("adx_threshold",)),
-    "meanrev": dict(run=run_backtest_meanrev, grid=MEANREV_GRID, group_by=("use_trend_alignment", "vwap_band_mult")),
+    "meanrev": dict(run=run_backtest_meanrev, grid=MEANREV_GRID, group_by=("use_trend_alignment", "use_obv_confirm")),
 }
 
 

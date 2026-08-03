@@ -66,6 +66,9 @@ dailyKillUSD = input.float(900, "Daily Kill Switch ($) - placeholder, confirm re
 useTrendAlignment = input.bool(true, "Use Trend Alignment Filter (don't fight the broader trend)")
 trendLen          = input.int(100, "Trend Alignment EMA Length")
 
+useObvConfirm = input.bool(true, "Use OBV Volume-Trend Confirmation")
+obvLookback   = input.int(20, "OBV Lookback (bars)")
+
 // ---------------------------------------------------------------------
 // Session helpers (ET) - plain minute-of-day arithmetic
 // ---------------------------------------------------------------------
@@ -100,6 +103,24 @@ trendEma = ta.ema(close, trendLen)
 // the broader trend.
 longTrendOk  = (not useTrendAlignment) or close >= trendEma
 shortTrendOk = (not useTrendAlignment) or close <= trendEma
+
+// On-Balance Volume - cumulative volume added on up closes, subtracted on
+// down closes. Confirms real volume is actually backing the trend
+// direction, not just price drifting on light volume. Computed manually
+// (not ta.obv) to match the Python optimizer's implementation exactly.
+var float obvValue = 0.0
+if close > close[1]
+    obvValue += volume
+else if close < close[1]
+    obvValue -= volume
+
+obvRising  = obvValue > obvValue[obvLookback]
+obvFalling = obvValue < obvValue[obvLookback]
+longObvOk  = (not useObvConfirm) or obvRising
+shortObvOk = (not useObvConfirm) or obvFalling
+
+longTrendOk  := longTrendOk and longObvOk
+shortTrendOk := shortTrendOk and shortObvOk
 
 plot(vwapValue, "VWAP", color = color.yellow, linewidth = 2)
 plot(upperBand, "Upper Band", color = color.new(color.red, 40))
@@ -220,7 +241,7 @@ else if strategy.position_size < 0 and not target1Hit and close <= target1Short
 // ---------------------------------------------------------------------
 // On-chart status table
 // ---------------------------------------------------------------------
-var table statusTable = table.new(position.top_right, 2, 8, border_width = 1)
+var table statusTable = table.new(position.top_right, 2, 9, border_width = 1)
 if barstate.islast
     table.cell(statusTable, 0, 0, "Daily P&L", bgcolor = color.gray, text_color = color.white)
     table.cell(statusTable, 1, 0, str.tostring(dailyPnl, "#.##"), bgcolor = color.gray, text_color = color.white)
@@ -240,6 +261,9 @@ if barstate.islast
     table.cell(statusTable, 0, 6, "Stop Price", bgcolor = color.gray, text_color = color.white)
     table.cell(statusTable, 1, 6, na(stopPrice) ? "—" : str.tostring(stopPrice, "#.##"),
          bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 0, 7, "Trend OK L/S", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 7, "Trend+OBV OK L/S", bgcolor = color.gray, text_color = color.white)
     table.cell(statusTable, 1, 7, (longTrendOk ? "L:Yes " : "L:No ") + (shortTrendOk ? "S:Yes" : "S:No"),
+         bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 8, "OBV Rising/Falling", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 8, (obvRising ? "Rising" : obvFalling ? "Falling" : "Flat"),
          bgcolor = color.gray, text_color = color.white)
