@@ -45,6 +45,40 @@ As a result, this repo now has two parts:
    test/demo routing first.** Do not point a freshly-wired alert straight at
    a funded account.
 
+## Parameter tuning: use the optimizer, don't hand-tweak in TradingView
+
+`backtest_optimizer.py` runs a proper walk-forward parameter search
+locally (needs normal internet access — Yahoo Finance is blocked in the
+sandboxed environment this was built in, so this has to run on your own
+machine):
+
+```
+python backtest_optimizer.py
+```
+
+What it does:
+1. Pulls free historical MNQ/MES data (30-min bars: ~60 days available;
+   60-min bars: up to ~2 years — Yahoo's own limits, not something we can
+   change without a paid data source).
+2. Splits it chronologically: first 70% = in-sample (used for search),
+   last 30% = out-of-sample (never touched during search).
+3. Grid-searches a modest parameter set on in-sample data only, and scores
+   EMA pairs by how consistently they perform across different stop/filter
+   settings (robust), not just whichever single combo peaked highest
+   (likely overfit).
+4. Takes the most robust candidate(s) and runs each ONCE, unchanged, on
+   the out-of-sample data. **That out-of-sample number is the one to
+   trust** — if profit factor holds above 1.0 there, it's a real signal;
+   if it collapses, the in-sample result was noise.
+
+This is a research tool, not a byte-for-byte replica of TradingView's
+fill accounting — use it to narrow down promising parameter zones fast,
+then confirm the final candidate in TradingView's Strategy Tester before
+considering demo trading. Re-run it periodically (e.g., monthly) as new
+data comes in rather than hand-tweaking parameters against whatever the
+last TradingView screenshot happened to show — repeatedly tuning against
+the same window is how you accidentally curve-fit without meaning to.
+
 ## How the strategy logic works
 
 - **Entry signal**: EMA(9)/EMA(21) crossover, only acted on if current
