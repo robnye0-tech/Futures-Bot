@@ -1,12 +1,21 @@
 """
 Walk-forward parameter robustness search for the futures scale-in-out
-strategy. Supports two entry-signal families:
+strategy. Supports three entry-signal families:
 
   - "crossover": EMA crossover + volume/trend/VWAP filters. Tested and
     found to have NO real out-of-sample edge on MNQ/MES 30m/60m - kept
     here for reference/comparison, not recommended as the active strategy.
   - "orb": Opening Range Breakout + VWAP confluence + volume + ADX
-    momentum/trend-strength filter. The current candidate approach.
+    momentum/trend-strength filter. Tested on MNQ/MES 1m/5m/15m - failed
+    out-of-sample everywhere except a single MNQ 1-minute config, and that
+    one only "held up" on a 3-day/26-trade out-of-sample slice (Yahoo's
+    7-day cap for 1m data) - too thin to trust, and a larger TradingView
+    sample on the same idea (ADX filter off) came back clearly negative
+    (PF 0.83, ~258 trades). Kept for reference, not recommended.
+  - "meanrev": VWAP mean-reversion - fades price back toward VWAP when
+    stretched (2x ATR band) AND the market is range-bound (ADX below a
+    threshold - the inverse condition from ORB's filter). The current
+    candidate approach.
 
 WHY THIS EXISTS: manually tweaking one parameter at a time in TradingView
 and re-testing against the same window is how you accidentally overfit to
@@ -94,6 +103,20 @@ ORB_GRID = dict(
     stop_atr_mult=[1.2, 1.5, 1.8],
     use_vwap_filter=[True, False],
     use_adx_filter=[True, False],
+)
+
+MEANREV_DEFAULTS = {**SHARED_DEFAULTS, **dict(
+    vwap_band_mult=2.0,
+    adx_len=14, adx_threshold=20,   # note: LOW adx = range-bound = the condition we want here
+    target_fraction_1=0.5,          # halfway back to VWAP
+    target_fraction_2=1.0,          # full VWAP touch
+)}
+
+MEANREV_GRID = dict(
+    vwap_band_mult=[1.5, 2.0, 2.5],
+    adx_threshold=[15, 20, 25],
+    stop_atr_mult=[1.0, 1.5, 2.0],
+    vol_mult=[1.2, 1.5],
 )
 
 
@@ -461,9 +484,130 @@ def run_backtest_orb(bars, symbol, params):
     return _simulate(bars, symbol, p, entry_signal)
 
 
+# ---------------------------------------------------------------------
+# Strategy 3: VWAP mean-reversion in range-bound conditions (current candidate)
+#
+# Targets are relative to VWAP at entry (halfway back, full touch) rather
+# than open-ended ATR extensions, since the whole thesis is "reverts to
+# the mean," not "keeps running" - this has its own simulation loop
+# instead of reusing _simulate/entry_signal, because the target logic is
+# structurally different (VWAP-relative, not last-scale-price-relative).
+# ---------------------------------------------------------------------
+def run_backtest_meanrev(bars, symbol, params):
+    p = {**MEANREV_DEFAULTS, **params}
+    closes = [b["close"] for b in bars]
+    volumes = [b["volume"] for b in bars]
+
+    atr = atr_series(bars, p["atr_len"])
+    avg_vol = sma_series(volumes, p["vol_len"])
+    vwap = vwap_series(bars)
+    adx = adx_series(bars, p["adx_len"])
+
+    point_value = POINT_VALUE[symbol]
+    slippage_price = TICK_SIZE[symbol] * p["slippage_ticks"]
+
+    position = None
+    trade_cashflows = []
+
+    def close_qty(direction, qty, price, avg_entry):
+        fill_price = price - slippage_price if direction == "long" else price + slippage_price
+        per_contract = (fill_price - avg_entry) if direction == "long" else (avg_entry - fill_price)
+        trade_cashflows.append(per_contract * point_value * qty - p["commission_per_contract"] * qty)
+
+    for i in range(1, len(bars)):
+        if atr[i] is None or avg_vol[i] is None or vwap[i] is None or adx[i] is None:
+            continue
+
+        dt = bars[i]["dt"]
+        price = closes[i]
+        vol_confirmed = volumes[i] > avg_vol[i] * p["vol_mult"]
+        can_trade = _in_session(dt, p["session_start"], p["session_end"])
+        range_bound = adx[i] < p["adx_threshold"]
+
+        upper_band = vwap[i] + atr[i] * p["vwap_band_mult"]
+        lower_band = vwap[i] - atr[i] * p["vwap_band_mult"]
+
+        if position is not None:
+            direction = position["direction"]
+            stop_hit = (direction == "long" and price <= position["stop"]) or \
+                       (direction == "short" and price >= position["stop"])
+            if stop_hit:
+                close_qty(direction, position["size"], price, position["avg_entry"])
+                position = None
+                continue
+
+            favorable = (price - position["last_scale_price"]) if direction == "long" \
+                else (position["last_scale_price"] - price)
+            if (can_trade and position["size"] < p["max_size"]
+                    and favorable >= atr[i] * p["scale_in_atr_mult"] and vol_confirmed):
+                add_qty = min(p["add_size"], p["max_size"] - position["size"])
+                fill_price = price + slippage_price if direction == "long" else price - slippage_price
+                prior_cost = position["avg_entry"] * position["size"]
+                position["avg_entry"] = (prior_cost + fill_price * add_qty) / (position["size"] + add_qty)
+                position["size"] += add_qty
+                position["last_scale_price"] = price
+                trade_cashflows.append(-p["commission_per_contract"] * add_qty)
+                continue
+
+            entry_vwap_distance = (position["entry_vwap"] - position["entry_price"]) if direction == "long" \
+                else (position["entry_price"] - position["entry_vwap"])
+            target1 = position["entry_price"] + entry_vwap_distance * p["target_fraction_1"] if direction == "long" \
+                else position["entry_price"] - entry_vwap_distance * p["target_fraction_1"]
+            target2 = position["entry_price"] + entry_vwap_distance * p["target_fraction_2"] if direction == "long" \
+                else position["entry_price"] - entry_vwap_distance * p["target_fraction_2"]
+
+            hit_t1 = (direction == "long" and price >= target1) or (direction == "short" and price <= target1)
+            hit_t2 = (direction == "long" and price >= target2) or (direction == "short" and price <= target2)
+
+            if hit_t2 and not position["target2_hit"]:
+                close_qty(direction, position["size"], price, position["avg_entry"])
+                position = None
+                continue
+            elif hit_t1 and not position["target1_hit"] and position["size"] > 1:
+                trim = max(1, position["size"] // 2)
+                close_qty(direction, trim, price, position["avg_entry"])
+                position["size"] -= trim
+                if position["size"] <= 0:
+                    position = None
+                else:
+                    position["target1_hit"] = True
+                continue
+
+        if position is None and can_trade and range_bound:
+            if price <= lower_band and vol_confirmed:
+                fill_price = price + slippage_price
+                position = dict(direction="long", size=p["base_size"], avg_entry=fill_price,
+                                 last_scale_price=price, stop=price - atr[i] * p["stop_atr_mult"],
+                                 entry_price=price, entry_vwap=vwap[i],
+                                 target1_hit=False, target2_hit=False)
+                trade_cashflows.append(-p["commission_per_contract"] * p["base_size"])
+            elif price >= upper_band and vol_confirmed:
+                fill_price = price - slippage_price
+                position = dict(direction="short", size=p["base_size"], avg_entry=fill_price,
+                                 last_scale_price=price, stop=price + atr[i] * p["stop_atr_mult"],
+                                 entry_price=price, entry_vwap=vwap[i],
+                                 target1_hit=False, target2_hit=False)
+                trade_cashflows.append(-p["commission_per_contract"] * p["base_size"])
+
+    gross_profit = sum(c for c in trade_cashflows if c > 0)
+    gross_loss = -sum(c for c in trade_cashflows if c < 0)
+    net = sum(trade_cashflows)
+    if gross_loss > 0:
+        profit_factor = gross_profit / gross_loss
+    else:
+        profit_factor = float("inf") if gross_profit > 0 else 0.0
+
+    return dict(
+        events=len(trade_cashflows), net_pnl=net,
+        gross_profit=gross_profit, gross_loss=gross_loss,
+        profit_factor=profit_factor,
+    )
+
+
 STRATEGIES = {
     "crossover": dict(run=run_backtest_crossover, grid=CROSSOVER_GRID, group_by=("fast_len", "slow_len")),
     "orb": dict(run=run_backtest_orb, grid=ORB_GRID, group_by=("adx_threshold",)),
+    "meanrev": dict(run=run_backtest_meanrev, grid=MEANREV_GRID, group_by=("vwap_band_mult",)),
 }
 
 
@@ -555,7 +699,7 @@ def run_for(symbol, interval, strategy_name):
 def main():
     for symbol in ["MNQ=F", "MES=F"]:
         for interval in ["1m", "5m", "15m"]:
-            run_for(symbol, interval, "orb")
+            run_for(symbol, interval, "meanrev")
 
 
 if __name__ == "__main__":
