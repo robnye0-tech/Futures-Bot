@@ -110,6 +110,8 @@ MEANREV_DEFAULTS = {**SHARED_DEFAULTS, **dict(
     adx_len=14, adx_threshold=20,   # note: LOW adx = range-bound = the condition we want here
     target_fraction_1=0.5,          # halfway back to VWAP
     target_fraction_2=1.0,          # full VWAP touch
+    use_trend_alignment=True,       # only trade mean-reversion WITH/neutral to the broader trend
+    trend_len=100,
 )}
 
 MEANREV_GRID = dict(
@@ -117,6 +119,7 @@ MEANREV_GRID = dict(
     adx_threshold=[15, 20, 25],
     stop_atr_mult=[1.0, 1.5, 2.0],
     vol_mult=[1.2, 1.5],
+    use_trend_alignment=[True, False],
 )
 
 
@@ -502,6 +505,7 @@ def run_backtest_meanrev(bars, symbol, params):
     avg_vol = sma_series(volumes, p["vol_len"])
     vwap = vwap_series(bars)
     adx = adx_series(bars, p["adx_len"])
+    trend_ema = ema_series(closes, p["trend_len"])
 
     point_value = POINT_VALUE[symbol]
     slippage_price = TICK_SIZE[symbol] * p["slippage_ticks"]
@@ -516,6 +520,8 @@ def run_backtest_meanrev(bars, symbol, params):
 
     for i in range(1, len(bars)):
         if atr[i] is None or avg_vol[i] is None or vwap[i] is None or adx[i] is None:
+            continue
+        if p["use_trend_alignment"] and trend_ema[i] is None:
             continue
 
         dt = bars[i]["dt"]
@@ -573,15 +579,21 @@ def run_backtest_meanrev(bars, symbol, params):
                     position["target1_hit"] = True
                 continue
 
+        # Trend alignment: don't buy dips fighting a clear downtrend, and
+        # don't short rallies fighting a clear uptrend - only trade
+        # mean-reversion aligned with or neutral to the broader trend.
+        long_trend_ok = (not p["use_trend_alignment"]) or price >= trend_ema[i]
+        short_trend_ok = (not p["use_trend_alignment"]) or price <= trend_ema[i]
+
         if position is None and can_trade and range_bound:
-            if price <= lower_band and vol_confirmed:
+            if price <= lower_band and vol_confirmed and long_trend_ok:
                 fill_price = price + slippage_price
                 position = dict(direction="long", size=p["base_size"], avg_entry=fill_price,
                                  last_scale_price=price, stop=price - atr[i] * p["stop_atr_mult"],
                                  entry_price=price, entry_vwap=vwap[i],
                                  target1_hit=False, target2_hit=False)
                 trade_cashflows.append(-p["commission_per_contract"] * p["base_size"])
-            elif price >= upper_band and vol_confirmed:
+            elif price >= upper_band and vol_confirmed and short_trend_ok:
                 fill_price = price - slippage_price
                 position = dict(direction="short", size=p["base_size"], avg_entry=fill_price,
                                  last_scale_price=price, stop=price + atr[i] * p["stop_atr_mult"],
@@ -607,7 +619,7 @@ def run_backtest_meanrev(bars, symbol, params):
 STRATEGIES = {
     "crossover": dict(run=run_backtest_crossover, grid=CROSSOVER_GRID, group_by=("fast_len", "slow_len")),
     "orb": dict(run=run_backtest_orb, grid=ORB_GRID, group_by=("adx_threshold",)),
-    "meanrev": dict(run=run_backtest_meanrev, grid=MEANREV_GRID, group_by=("vwap_band_mult",)),
+    "meanrev": dict(run=run_backtest_meanrev, grid=MEANREV_GRID, group_by=("use_trend_alignment", "vwap_band_mult")),
 }
 
 
