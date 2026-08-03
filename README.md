@@ -1,22 +1,57 @@
 # Futures Bot
 
 Momentum/volume scale-in-out trading strategy for MNQ (Micro Nasdaq) and MES
-(Micro S&P 500) futures, built for a Tradeify funded account via Tradovate.
-Includes a local status dashboard with an account overview, live positions,
-trade log, and a Nasdaq/tech-relevant news feed.
+(Micro S&P 500) futures, built for a Tradeify Sim Funded account.
 
-## Status
+## Important: architecture note (read this first)
 
-**Not yet live.** The trading logic is complete, but it is not connected to
-a broker yet. See [Open items](#open-items) below.
+The original plan was a pure Python bot (Lumibot) connecting directly to
+Tradovate's API. **That path does not work for Sim Funded prop firm
+accounts** — Tradovate only issues API credentials (CID/Secret) for Live
+Funded accounts. Sim Funded accounts must automate through the trading
+platform itself instead.
 
-## How it works
+As a result, this repo now has two parts:
 
-- **Entry signal**: EMA(9)/EMA(21) crossover on 1-minute bars, only acted on
-  if current volume exceeds 1.5x its 20-bar average (momentum + volume
-  confirmation, both long and short).
-- **Scale in**: adds to a winning position (up to a per-symbol cap) only when
-  price continues moving favorably by a full ATR with volume still
+1. **`pinescript/`** — the actual live trading logic, written in Pine Script
+   to run on TradingView (free real-time futures data), with its alerts
+   wired to [PickMyTrade](https://pickmytrade.trade/) (a webhook bridge) to
+   execute on your Tradeify account. **This is the active trading path.**
+2. **`strategy.py` and friends** (Python/Lumibot) — the original direct-API
+   version. Left in the repo for reference and because the dashboard/news
+   feed pieces are still useful, but `strategy.py` **cannot place live
+   trades on a Sim Funded account** and should not be run expecting it to.
+
+## Active setup: Pine Script + TradingView + PickMyTrade
+
+1. Open TradingView, load an **MNQ1!** or **MES1!** continuous futures chart.
+2. Open Pine Editor, paste in `pinescript/jarvis_mnq_mes_scaler.pine`, and
+   add it to the chart as a strategy.
+3. Adjust the inputs in the strategy settings if needed (they mirror the
+   constants that were in `config.py`) — position sizing, ATR multiples,
+   session hours, and the daily kill switch dollar amount. **Confirm the
+   real Tradeify max trailing drawdown figure and set the kill switch
+   comfortably below it before going live.**
+4. Sign up for [PickMyTrade](https://pickmytrade.trade/) and connect your
+   Tradeify/Tradovate account through their dashboard.
+5. In PickMyTrade's dashboard, generate the webhook URL and JSON alert
+   template for your account (**do not hand-write this JSON yourself** —
+   use their generator, it embeds your account token correctly).
+6. In TradingView, create an alert on the strategy (condition: "Order
+   fills" or "Any alert() function call", whichever PickMyTrade's current
+   docs specify), paste in the webhook URL and the generated JSON template
+   from step 5.
+7. **Test in TradingView's Bar Replay / paper mode and against PickMyTrade's
+   test/demo routing first.** Do not point a freshly-wired alert straight at
+   a funded account.
+
+## How the strategy logic works
+
+- **Entry signal**: EMA(9)/EMA(21) crossover, only acted on if current
+  volume exceeds 1.5x its 20-bar average (momentum + volume confirmation,
+  both long and short).
+- **Scale in**: adds to a winning position (up to a per-symbol cap) only
+  when price continues moving favorably by a full ATR with volume still
   confirming. Never adds to a loser.
 - **Scale out**: takes partial profits in tranches as the trade extends
   (1x ATR, 2x ATR), trailing the stop on what's left.
@@ -24,83 +59,53 @@ a broker yet. See [Open items](#open-items) below.
 - **Daily kill switch**: flattens all positions and halts new entries once
   the day's cumulative loss hits a configured threshold — a safety buffer
   *below* Tradeify's actual daily loss limit, not the limit itself.
-- **Session filter**: only trades 9:30 AM–4:00 PM ET by default.
-- **News feed**: pulls Nasdaq/tech/macro-relevant headlines (Alpha Vantage
-  News & Sentiment) into the dashboard on a timer.
-
-All tunable parameters live in `config.py`.
+- **Session filter**: only enters new trades 9:30 AM–4:00 PM ET by default
+  (stops/exits remain active at all times for safety).
+- **On-chart status table**: shows daily P&L, kill switch state, current
+  position, session status, and stop price directly on the TradingView
+  chart.
 
 ## Project structure
 
 ```
-strategy.py       # the trading logic (Lumibot Strategy)
-config.py         # all tunable constants in one place
-shared_state.py    # file-based state store shared between strategy and dashboard
-news_feed.py       # Alpha Vantage news fetcher
-dashboard.py        # Flask dashboard (Overview / Positions / Trade Log / News)
-templates/           # dashboard HTML templates
+pinescript/
+  jarvis_mnq_mes_scaler.pine   # ACTIVE strategy - runs on TradingView
+
+strategy.py         # original Python/Lumibot version - reference only,
+                     # cannot place live trades on a Sim Funded account
+config.py            # constants for the Python version
+shared_state.py       # file-based state store (Python version)
+news_feed.py           # Alpha Vantage news fetcher
+dashboard.py             # Flask dashboard (Python version)
+templates/                 # dashboard HTML templates
+test_connection.py           # Tradovate direct-API test - only relevant
+                              # if you later upgrade to a Live Funded account
 ```
-
-The strategy process and the dashboard process are independent — the
-strategy writes its state to `runtime_state.json`, and the dashboard just
-reads and displays it. Run them in two separate terminals.
-
-## Setup
-
-1. Create a virtual environment and install dependencies:
-   ```
-   python -m venv venv
-   venv\Scripts\Activate.ps1      # Windows
-   # source venv/bin/activate     # Mac/Linux
-   pip install -r requirements.txt
-   ```
-
-2. Copy `.env.example` to `.env` and fill in your real credentials:
-   ```
-   copy .env.example .env          # Windows
-   # cp .env.example .env          # Mac/Linux
-   ```
-
-3. **Test your Tradovate credentials before anything else.** This authenticates
-   and lists your accounts - it places zero orders:
-   ```
-   python test_connection.py
-   ```
-   Fix any auth errors here before moving on. Common causes: using your normal
-   login password instead of the dedicated API password, or wrong CID/secret.
-
-4. Run the strategy:
-   ```
-   python strategy.py
-   ```
-
-5. In a separate terminal (same venv activated), run the dashboard:
-   ```
-   python dashboard.py
-   ```
-   Then open http://127.0.0.1:5000 in a browser.
 
 ## Open items
 
-- **Tradovate API credentials** — request these through Tradovate's API
-  access program / your Tradeify account before the strategy can connect to
-  anything. Until `.env` has real `TRADOVATE_*` values, `strategy.py` will
-  not run.
-- **Confirm real risk numbers** — `RISK_PER_TRADE_USD` and
-  `DAILY_KILL_SWITCH_USD` in `config.py` are conservative placeholders.
-  Confirm Tradeify's actual max trailing drawdown figure (separate from the
-  known $1,250 daily loss limit on the $50K Lightning Funded account) and
-  update these before trading real size.
-- **Prop firm automation policy** — verify directly with Tradeify/Tradovate
-  that automated/algorithmic trading is permitted on your specific account
-  tier before going live. Policies vary and change over time.
-- **No historical backtest yet** — futures historical data isn't free the
-  way stock data is; this strategy is designed to be validated live against
-  Tradovate's demo/paper account first rather than an offline backtest.
-  Do not skip demo testing before risking a funded account.
-- **Alpha Vantage free tier is rate-limited** — the news feed refreshes on a
-  timer (`NEWS_REFRESH_MINUTES` in `config.py`), not every iteration, to
-  stay within free-tier limits.
+- **Confirm real risk numbers** — `dailyKillUSD` in the Pine Script (and
+  `RISK_PER_TRADE_USD` / `DAILY_KILL_SWITCH_USD` in `config.py`) are
+  conservative placeholders. Confirm Tradeify's actual max trailing
+  drawdown figure (separate from the known $1,250 daily loss limit on the
+  $50K Lightning Funded account) and update these before trading real size.
+- **Prop firm automation policy** — Tradeify's stated policy allows personal
+  bots/scripts that are solely owned, not shared, and not HFT, plus a
+  "microscalping rule" requiring over 50% of trades/profit to come from
+  positions held longer than 10 seconds. Make sure the strategy's behavior
+  stays within that as configured (the ATR-based holds should comfortably
+  clear 10 seconds, but verify in practice).
+- **PickMyTrade webhook wiring** — the exact JSON template must come from
+  PickMyTrade's own generator (see setup steps above), not be hand-written.
+- **Dashboard/news feed are currently disconnected from live trading** —
+  they were built around the Python strategy pushing state to
+  `runtime_state.json`, which no longer happens since the Pine Script
+  strategy runs on TradingView, not in this Python process. Reconnecting
+  them (e.g., via PickMyTrade's own trade history/API, if available) is a
+  follow-up item, not yet done.
+- **No historical backtest of the Pine Script version yet** — validate using
+  TradingView's own Strategy Tester (built into Pine Editor) before going
+  live.
 
 ## Risk disclaimer
 
@@ -108,5 +113,6 @@ This is a technical trading system built on sound but ordinary techniques
 (momentum, volume confirmation, volatility-based risk sizing). It is not a
 predictive system and does not "see the market coming" — no such system
 exists. Past behavior of these signals is not a guarantee of future
-performance. Test thoroughly on a demo/paper account before risking a
-funded account, and never risk more than you can afford to lose.
+performance. Test thoroughly (TradingView Strategy Tester, then
+paper/demo routing) before risking a funded account, and never risk more
+than you can afford to lose.
