@@ -61,12 +61,20 @@ reads and displays it. Run them in two separate terminals.
    # cp .env.example .env          # Mac/Linux
    ```
 
-3. Run the strategy:
+3. **Test your Tradovate credentials before anything else.** This authenticates
+   and lists your accounts - it places zero orders:
+   ```
+   python test_connection.py
+   ```
+   Fix any auth errors here before moving on. Common causes: using your normal
+   login password instead of the dedicated API password, or wrong CID/secret.
+
+4. Run the strategy:
    ```
    python strategy.py
    ```
 
-4. In a separate terminal (same venv activated), run the dashboard:
+5. In a separate terminal (same venv activated), run the dashboard:
    ```
    python dashboard.py
    ```
