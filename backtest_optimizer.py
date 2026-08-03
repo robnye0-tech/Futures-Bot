@@ -1,6 +1,6 @@
 """
 Walk-forward parameter robustness search for the futures scale-in-out
-strategy. Supports three entry-signal families:
+strategy. Supports four entry-signal families:
 
   - "crossover": EMA crossover + volume/trend/VWAP filters. Tested and
     found to have NO real out-of-sample edge on MNQ/MES 30m/60m - kept
@@ -20,7 +20,18 @@ strategy. Supports three entry-signal families:
     stacking both together can over-restrict the sample size (confirmed
     both on real TradingView data and in this script's own smoke test),
     so the report compares all four on/off combinations rather than
-    assuming more filters = better.
+    assuming more filters = better. Real TradingView confirmation (not
+    just this script): MNQ 5m held up with real costs (PF 1.185-1.403,
+    ~100+ trades); MES 5m did NOT hold up on the same real period despite
+    a strong signal in this script's earlier search - treat MNQ 5m as the
+    one currently-trustworthy result, not MES.
+  - "vwap_pullback": trend-continuation - the OPPOSITE regime and
+    direction from meanrev. Trades WITH a moderate trend (ADX 20-35, not
+    range-bound) on pullbacks TO VWAP that hold (a rejection candle),
+    entering on a breakout of that candle's high/low. Newest candidate,
+    not yet validated - logic-verified via an engineered test scenario,
+    but needs a real walk-forward run against actual data before trusting
+    any result from it.
 
 WHY THIS EXISTS: manually tweaking one parameter at a time in TradingView
 and re-testing against the same window is how you accidentally overfit to
@@ -132,6 +143,20 @@ MEANREV_GRID = dict(
     vol_mult=[1.2, 1.5],
     use_trend_alignment=[True, False],
     use_obv_confirm=[True, False],
+)
+
+VWAPPB_DEFAULTS = {**SHARED_DEFAULTS, **dict(
+    adx_len=14, adx_low=20, adx_high=35,   # trending-but-not-extreme - OPPOSITE regime from meanrev
+    trend_fast_len=20, trend_slow_len=50,
+    breakout_window=5,                     # bars to wait for the rejection candle's high/low to break
+)}
+
+VWAPPB_GRID = dict(
+    adx_low=[15, 20, 25],
+    adx_high=[30, 35, 40],
+    trend_fast_len=[10, 20],
+    trend_slow_len=[50, 100],
+    stop_atr_mult=[1.0, 1.5, 2.0],
 )
 
 
@@ -656,10 +681,80 @@ def run_backtest_meanrev(bars, symbol, params):
     )
 
 
+# ---------------------------------------------------------------------
+# Strategy 4: VWAP pullback trend-continuation
+#
+# Opposite regime from meanrev (moderately trending, ADX 20-35, not
+# range-bound) and opposite direction (trades WITH the trend, entering
+# on pullbacks TO VWAP that hold, not fades of extremes away from it).
+# Two-stage signal: a "rejection candle" (touches VWAP, closes back on
+# the trend side) sets up a pending breakout level; a later bar breaking
+# that level triggers the actual entry. Reuses _simulate's shared
+# scale-in/out/stop/target engine via a stateful entry_signal closure.
+# ---------------------------------------------------------------------
+def run_backtest_vwap_pullback(bars, symbol, params):
+    p = {**VWAPPB_DEFAULTS, **params}
+    closes = [b["close"] for b in bars]
+    highs = [b["high"] for b in bars]
+    lows = [b["low"] for b in bars]
+    opens = [b["open"] for b in bars]
+
+    vwap = vwap_series(bars)
+    adx = adx_series(bars, p["adx_len"])
+    trend_fast = ema_series(closes, p["trend_fast_len"])
+    trend_slow = ema_series(closes, p["trend_slow_len"])
+
+    pending = {"direction": None, "trigger": None, "bars_left": 0}
+
+    def entry_signal(i, vol_confirmed):
+        if adx[i] is None or vwap[i] is None or trend_fast[i] is None or trend_slow[i] is None:
+            return None
+
+        if pending["direction"] == "long":
+            if highs[i] >= pending["trigger"]:
+                pending["direction"] = None
+                return "long"
+            pending["bars_left"] -= 1
+            if pending["bars_left"] <= 0:
+                pending["direction"] = None
+        elif pending["direction"] == "short":
+            if lows[i] <= pending["trigger"]:
+                pending["direction"] = None
+                return "short"
+            pending["bars_left"] -= 1
+            if pending["bars_left"] <= 0:
+                pending["direction"] = None
+
+        if pending["direction"] is not None:
+            return None  # still waiting on an existing pending setup
+
+        regime_trending = p["adx_low"] <= adx[i] <= p["adx_high"]
+        if not regime_trending:
+            return None
+
+        uptrend = trend_fast[i] > trend_slow[i]
+        downtrend = trend_fast[i] < trend_slow[i]
+
+        # Rejection candle: dipped to/through VWAP then closed back on the trend side
+        if uptrend and lows[i] <= vwap[i] and closes[i] > vwap[i] and closes[i] > opens[i] and vol_confirmed:
+            pending["direction"] = "long"
+            pending["trigger"] = highs[i]
+            pending["bars_left"] = p["breakout_window"]
+        elif downtrend and highs[i] >= vwap[i] and closes[i] < vwap[i] and closes[i] < opens[i] and vol_confirmed:
+            pending["direction"] = "short"
+            pending["trigger"] = lows[i]
+            pending["bars_left"] = p["breakout_window"]
+
+        return None
+
+    return _simulate(bars, symbol, p, entry_signal)
+
+
 STRATEGIES = {
     "crossover": dict(run=run_backtest_crossover, grid=CROSSOVER_GRID, group_by=("fast_len", "slow_len")),
     "orb": dict(run=run_backtest_orb, grid=ORB_GRID, group_by=("adx_threshold",)),
     "meanrev": dict(run=run_backtest_meanrev, grid=MEANREV_GRID, group_by=("use_trend_alignment", "use_obv_confirm")),
+    "vwap_pullback": dict(run=run_backtest_vwap_pullback, grid=VWAPPB_GRID, group_by=("adx_low", "adx_high")),
 }
 
 
@@ -749,9 +844,12 @@ def run_for(symbol, interval, strategy_name):
 
 
 def main():
+    # meanrev (MNQ 5m specifically) already has real TradingView confirmation
+    # - see README. Testing the new vwap_pullback candidate now. Change the
+    # strategy name below (or add a second loop) to re-run meanrev/orb/crossover.
     for symbol in ["MNQ=F", "MES=F"]:
-        for interval in ["1m", "5m", "15m"]:
-            run_for(symbol, interval, "meanrev")
+        for interval in ["5m", "15m"]:
+            run_for(symbol, interval, "vwap_pullback")
 
 
 if __name__ == "__main__":
