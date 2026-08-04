@@ -24,13 +24,19 @@ As a result, this repo now has two parts:
 
 ### Which Pine Script to use
 
-- **`jarvis_meanrev_vwap_scaler.pine`** — **current candidate.** VWAP
-  mean-reversion: fades price back toward VWAP when stretched beyond a
-  volatility band, only in range-bound conditions (ADX below threshold —
-  the inverse filter from ORB). Walk-forward tested and, unlike the two
-  strategies below, actually held up out-of-sample with real sample sizes
-  — best result was **MES on a 5-minute chart**, consistent across
-  multiple band widths. Start here; test on a 5-minute MNQ/MES chart.
+- **`jarvis_meanrev_vwap_scaler.pine`** — **current candidate, MNQ only.**
+  VWAP mean-reversion: fades price back toward VWAP when stretched beyond
+  a volatility band, only in range-bound conditions (ADX below threshold
+  — the inverse filter from ORB). **MNQ, 5-minute chart** has real
+  TradingView confirmation with commission/slippage included: profit
+  factor 1.185–1.403 depending on VWAP band width, ~100+ trades, tested
+  on multiple real (non-overlapping-in-search) windows. **MES on the same
+  setup did NOT hold up** on real data (PF 0.6–0.8) despite an earlier
+  strong signal in `backtest_optimizer.py`'s search — that MES result
+  didn't survive real-world confirmation. Trend-alignment and OBV
+  confirmation filters exist as toggles but default **off** — extensive
+  testing never found either one improving results. Commission
+  ($1/contract) and slippage (2 ticks) are baked into the script itself.
 - `jarvis_orb_vwap_scaler.pine` — Opening Range Breakout + VWAP + ADX
   momentum filter. Walk-forward tested across MNQ/MES 1m/5m/15m and
   failed everywhere except one MNQ 1-minute config that only held up on a
@@ -41,11 +47,17 @@ As a result, this repo now has two parts:
   have **no real out-of-sample edge** on MNQ/MES. Kept for reference only —
   do not use this one going forward.
 
+There is not yet a Pine Script for the newest candidate,
+`vwap_pullback` (trend-continuation, see below) — it exists only in
+`backtest_optimizer.py` so far and has not been validated against real
+data. Do not build/deploy a Pine version until it's shown real
+out-of-sample results.
+
 ## Active setup: Pine Script + TradingView + PickMyTrade
 
-1. Open TradingView, load an **MES1!** continuous futures chart on a
-   **5-minute timeframe** (the walk-forward-validated setup — MNQ 5m also
-   held up, other symbol/timeframe combos did not).
+1. Open TradingView, load an **MNQ1!** continuous futures chart on a
+   **5-minute timeframe** (the only setup with real, confirmed edge as of
+   now — MES on the same setup did not hold up, see above).
 2. Open Pine Editor, paste in `pinescript/jarvis_meanrev_vwap_scaler.pine`,
    and add it to the chart as a strategy.
 3. Adjust the inputs in the strategy settings if needed (they mirror the
@@ -92,11 +104,18 @@ What it does:
    trust** — if profit factor holds above 1.0 there, it's a real signal;
    if it collapses, the in-sample result was noise.
 
-It supports three strategy families (`crossover`, `orb`, `meanrev` — see
-`STRATEGIES` dict in the script) — `meanrev` (VWAP mean-reversion in
-range-bound conditions) is the current candidate and what `main()` runs
-by default. The other two are kept only for reference/comparison; both
-have already been tested and shown to lack real out-of-sample edge.
+It supports four strategy families (`crossover`, `orb`, `meanrev`,
+`vwap_pullback` — see `STRATEGIES` dict in the script). `main()`
+currently runs `vwap_pullback` (the newest, not-yet-validated
+trend-continuation candidate — opposite regime/direction from `meanrev`:
+trades WITH a moderately trending market, ADX 20-35, on pullbacks TO
+VWAP that hold, instead of fading extremes away from it in range-bound
+conditions). `meanrev`'s best result (MNQ 5m) already has real
+TradingView confirmation — see the Pine Script section above — so it's
+not the current priority to keep re-running, though the code is still
+there (`run_for(symbol, interval, "meanrev")`). `crossover` and `orb`
+are kept only for reference; both have already been tested and shown to
+lack real out-of-sample edge.
 
 One important reading note: a candidate can show a "held up" verdict
 with a very small out-of-sample trade count (single digits) if the
@@ -164,6 +183,18 @@ test_connection.py            # Tradovate direct-API test - only relevant
 
 ## Open items
 
+- **VWAP band robustness check still pending on MNQ 5m** — a manual test
+  found VWAP Band Multiple 2.5 outperforming the 2.0 default (PF 1.403 vs
+  1.185) on the same June 22–today window. This has NOT yet been checked
+  for robustness the way earlier fragile results were (e.g. testing 2.25
+  and 2.75 to confirm it's a real neighborhood and not a lucky single
+  value) or confirmed on a different, non-overlapping date range. Treat
+  2.5 as promising but unconfirmed until both checks are done.
+- **`vwap_pullback` strategy is untested against real data** — the logic
+  is implemented and verified correct via an engineered test scenario,
+  but has not yet been run through a real walk-forward search. Run
+  `python backtest_optimizer.py` (currently defaults to testing this
+  strategy) before drawing any conclusion about whether it works.
 - **Confirm real risk numbers** — `dailyKillUSD` in the Pine Script (and
   `RISK_PER_TRADE_USD` / `DAILY_KILL_SWITCH_USD` in `config.py`) are
   conservative placeholders. Confirm Tradeify's actual max trailing
