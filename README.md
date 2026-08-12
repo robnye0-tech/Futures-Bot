@@ -47,11 +47,21 @@ As a result, this repo now has two parts:
   have **no real out-of-sample edge** on MNQ/MES. Kept for reference only —
   do not use this one going forward.
 
-There is not yet a Pine Script for the newest candidate,
-`vwap_pullback` (trend-continuation, see below) — it exists only in
-`backtest_optimizer.py` so far and has not been validated against real
-data. Do not build/deploy a Pine version until it's shown real
-out-of-sample results.
+- **`jarvis_vwap_pullback_mnq.pine`** — **newest candidate, MNQ only, NOT
+  YET VALIDATED against real TradingView data.** Trend-continuation
+  (opposite mechanism from mean-reversion): trades WITH a moderately
+  trending market (ADX in a band, not below a ceiling) on pullbacks to
+  VWAP that get rejected and then break out in the trend direction.
+  `backtest_optimizer.py`'s walk-forward search found signal on MNQ at
+  both 5-minute (ADX 15-30, trend EMA 10/50, stop 1.5x ATR — the script's
+  defaults) and 15-minute (ADX 20-40, trend EMA 10/100, stop 2.0x ATR —
+  adjust the inputs if testing this timeframe). MES was explicitly
+  dropped from consideration per the same MNQ-only decision as
+  mean-reversion, without waiting for MES numbers here — MNQ is the
+  focus going forward. Commission ($1/contract) and slippage (2 ticks)
+  are baked into the script. **Do not treat this as trustworthy until
+  it's been run through TradingView's Strategy Tester on real data,
+  the same confirm/refute process used for mean-reversion.**
 
 ## Active setup: Pine Script + TradingView + PickMyTrade
 
@@ -166,6 +176,7 @@ the same window is how you accidentally curve-fit without meaning to.
 ```
 pinescript/
   jarvis_meanrev_vwap_scaler.pine   # ACTIVE strategy - runs on TradingView
+  jarvis_vwap_pullback_mnq.pine     # newest candidate, MNQ only - not yet validated
   jarvis_orb_vwap_scaler.pine       # ORB - reference only, no edge found
   jarvis_mnq_mes_scaler.pine        # EMA crossover - reference only, no edge found
 
@@ -190,11 +201,13 @@ test_connection.py            # Tradovate direct-API test - only relevant
   and 2.75 to confirm it's a real neighborhood and not a lucky single
   value) or confirmed on a different, non-overlapping date range. Treat
   2.5 as promising but unconfirmed until both checks are done.
-- **`vwap_pullback` strategy is untested against real data** — the logic
-  is implemented and verified correct via an engineered test scenario,
-  but has not yet been run through a real walk-forward search. Run
-  `python backtest_optimizer.py` (currently defaults to testing this
-  strategy) before drawing any conclusion about whether it works.
+- **`vwap_pullback` Pine Script (`jarvis_vwap_pullback_mnq.pine`) is
+  written but untested against real data** — the walk-forward search in
+  `backtest_optimizer.py` found MNQ signal at 5m and 15m, and the logic
+  has been ported to Pine with commission/slippage baked in, but it has
+  not yet been run through TradingView's Strategy Tester on real data.
+  Do this next, the same way mean-reversion was confirmed (and MES was
+  refuted) — a promising Python search result is not proof by itself.
 - **Confirm real risk numbers** — `dailyKillUSD` in the Pine Script (and
   `RISK_PER_TRADE_USD` / `DAILY_KILL_SWITCH_USD` in `config.py`) are
   conservative placeholders. Confirm Tradeify's actual max trailing

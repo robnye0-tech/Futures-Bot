@@ -1,0 +1,271 @@
+// @version=6
+// Jarvis VWAP Pullback Trend-Continuation Strategy — MNQ ONLY
+//
+// Opposite mechanism from jarvis_meanrev_vwap_scaler.pine: trades WITH a
+// moderately trending market (ADX in a band, e.g. 20-30 or 20-40 - NOT
+// the low-ADX range-bound condition mean-reversion wants) instead of
+// fading extremes. Waits for price to pull back TO VWAP and get
+// rejected (a candle that dips to/through VWAP but closes back on the
+// trend side), then enters on a breakout of that rejection candle's
+// high/low.
+//
+// MNQ-only by design: walk-forward testing (backtest_optimizer.py)
+// found real signal on MNQ (both 5m and 15m) but MES results were weak
+// and inconsistent - consistent with the earlier mean-reversion finding
+// that MES doesn't hold up the way MNQ does. Don't run this on MES.
+//
+// Two candidate configs found in walk-forward testing (adjust inputs
+// per timeframe - defaults below match the 5-minute config):
+//   5-minute:  ADX 15-30, trend EMA 10/50,  stop 1.5x ATR
+//   15-minute: ADX 20-40, trend EMA 10/100, stop 2.0x ATR
+//
+// NOT YET VALIDATED against real TradingView data - this is the next
+// step, the same process used to confirm (and in MES's case, refute)
+// the mean-reversion strategy. Do not treat this as trustworthy until
+// it's been tested here with real commission/slippage and a real
+// sample size, the same way jarvis_meanrev_vwap_scaler.pine was.
+//
+// This strategy is meant to be run on a TradingView chart (load MNQ1!
+// continuous futures), with its order-fill alerts wired to PickMyTrade
+// (or a similar bridge) to execute on your Tradeify account.
+//
+// Do NOT hand-write the webhook JSON yourself — use PickMyTrade's own
+// alert JSON generator in their dashboard and paste that into the
+// TradingView alert message box. See README for the full setup steps.
+
+strategy("Jarvis VWAP Pullback Trend-Continuation - MNQ",
+     overlay = true,
+     default_qty_type = strategy.fixed,
+     default_qty_value = 3,
+     pyramiding = 10,
+     calc_on_every_tick = false,
+     process_orders_on_close = true,
+     commission_type = strategy.commission.cash_per_contract,
+     commission_value = 1,
+     slippage = 2)
+
+// ---------------------------------------------------------------------
+// Inputs — defaults match the walk-forward-tested 5-minute config
+// ---------------------------------------------------------------------
+adxLen  = input.int(14, "ADX Length")
+adxLow  = input.float(15, "ADX Low Bound (trending regime floor)")
+adxHigh = input.float(30, "ADX High Bound (trending regime ceiling)")
+
+trendFastLen = input.int(10, "Trend Fast EMA Length")
+trendSlowLen = input.int(50, "Trend Slow EMA Length")
+
+breakoutWindow = input.int(5, "Breakout Window (bars to wait after rejection candle)")
+
+atrLen  = input.int(14, "ATR Length")
+volLen  = input.int(20, "Volume Avg Length")
+volMult = input.float(1.5, "Volume Multiplier")
+
+baseSize = input.int(3, "Base Size (contracts)")
+addSize  = input.int(3, "Scale-In Add Size")
+maxSize  = input.int(9, "Max Position Size (contracts)")
+
+stopAtrMult    = input.float(1.5, "Stop ATR Multiple (beyond entry)")
+scaleInAtrMult = input.float(1.0, "Scale-In ATR Multiple")
+target1AtrMult = input.float(1.0, "Target 1 ATR Multiple")
+target2AtrMult = input.float(2.0, "Target 2 ATR Multiple")
+
+sessionStartHour = input.int(9, "Session Start Hour (ET)")
+sessionStartMin  = input.int(30, "Session Start Minute (ET)")
+sessionEndHour   = input.int(16, "Session End Hour (ET)")
+sessionEndMin    = input.int(0, "Session End Minute (ET)")
+
+dailyKillUSD = input.float(900, "Daily Kill Switch ($) - placeholder, confirm real Tradeify drawdown figure")
+
+// ---------------------------------------------------------------------
+// Session helpers (ET) - plain minute-of-day arithmetic
+// ---------------------------------------------------------------------
+etHour   = hour(time, "America/New_York")
+etMinute = minute(time, "America/New_York")
+etDay    = dayofmonth(time, "America/New_York")
+
+nowMinutes          = etHour * 60 + etMinute
+sessionStartMinutes = sessionStartHour * 60 + sessionStartMin
+sessionEndMinutes   = sessionEndHour * 60 + sessionEndMin
+inSession = nowMinutes >= sessionStartMinutes and nowMinutes <= sessionEndMinutes
+
+newDay = ta.change(etDay) != 0
+
+// ---------------------------------------------------------------------
+// Indicators
+// ---------------------------------------------------------------------
+atrVal = ta.atr(atrLen)
+avgVol = ta.sma(volume, volLen)
+volConfirmed = volume > (avgVol * volMult)
+
+vwapValue = ta.vwap(hlc3)
+[diPlus, diMinus, adxValue] = ta.dmi(adxLen, adxLen)
+regimeTrending = adxValue >= adxLow and adxValue <= adxHigh
+
+trendFastEma = ta.ema(close, trendFastLen)
+trendSlowEma = ta.ema(close, trendSlowLen)
+uptrend   = trendFastEma > trendSlowEma
+downtrend = trendFastEma < trendSlowEma
+
+plot(vwapValue, "VWAP", color = color.yellow, linewidth = 2)
+plot(trendFastEma, "Trend Fast EMA", color = color.aqua)
+plot(trendSlowEma, "Trend Slow EMA", color = color.purple)
+
+// ---------------------------------------------------------------------
+// Daily kill switch
+// ---------------------------------------------------------------------
+var float dayStartEquity = na
+var bool  dailyHalted = false
+
+if newDay
+    dayStartEquity := strategy.equity
+    dailyHalted := false
+
+dailyPnl = na(dayStartEquity) ? 0.0 : strategy.equity - dayStartEquity
+
+if dailyPnl <= -dailyKillUSD and not dailyHalted
+    strategy.close_all(comment = "DAILY KILL SWITCH")
+    dailyHalted := true
+
+canTrade = inSession and not dailyHalted
+
+// ---------------------------------------------------------------------
+// Per-position state (reset whenever flat)
+// ---------------------------------------------------------------------
+var float lastScalePrice = na
+var float stopPrice = na
+var bool  target1Hit = false
+var bool  target2Hit = false
+
+if strategy.position_size == 0
+    lastScalePrice := na
+    stopPrice := na
+    target1Hit := false
+    target2Hit := false
+
+if strategy.position_size != 0 and na(lastScalePrice)
+    lastScalePrice := strategy.position_avg_price
+    stopPrice := strategy.position_size > 0 ?
+         close - atrVal * stopAtrMult : close + atrVal * stopAtrMult
+
+// ---------------------------------------------------------------------
+// Pending setup tracking: a rejection candle sets a pending breakout
+// level, a later bar breaking it triggers the actual entry. Only
+// tracked while flat and in-session, matching the Python optimizer.
+// ---------------------------------------------------------------------
+var string pendingDirection = na
+var float  pendingTrigger = na
+var int    pendingBarsLeft = 0
+
+if strategy.position_size == 0 and canTrade
+    if pendingDirection == "long"
+        if high >= pendingTrigger
+            strategy.entry("Long", strategy.long, qty = baseSize, comment = "PULLBACK LONG")
+            lastScalePrice := close
+            stopPrice := close - atrVal * stopAtrMult
+            pendingDirection := na
+        else
+            pendingBarsLeft := pendingBarsLeft - 1
+            if pendingBarsLeft <= 0
+                pendingDirection := na
+    else if pendingDirection == "short"
+        if low <= pendingTrigger
+            strategy.entry("Short", strategy.short, qty = baseSize, comment = "PULLBACK SHORT")
+            lastScalePrice := close
+            stopPrice := close + atrVal * stopAtrMult
+            pendingDirection := na
+        else
+            pendingBarsLeft := pendingBarsLeft - 1
+            if pendingBarsLeft <= 0
+                pendingDirection := na
+
+    if na(pendingDirection)
+        // Rejection candle: dipped to/through VWAP then closed back on the trend side
+        if uptrend and regimeTrending and low <= vwapValue and close > vwapValue and close > open and volConfirmed
+            pendingDirection := "long"
+            pendingTrigger := high
+            pendingBarsLeft := breakoutWindow
+        else if downtrend and regimeTrending and high >= vwapValue and close < vwapValue and close < open and volConfirmed
+            pendingDirection := "short"
+            pendingTrigger := low
+            pendingBarsLeft := breakoutWindow
+
+// ---------------------------------------------------------------------
+// Scale in — only on continued confirmed momentum, never into a loser
+// ---------------------------------------------------------------------
+longFavorable  = strategy.position_size > 0 ? close - lastScalePrice : na
+shortFavorable = strategy.position_size < 0 ? lastScalePrice - close : na
+
+canScaleInLong  = canTrade and strategy.position_size > 0 and strategy.position_size < maxSize and
+     not na(longFavorable) and longFavorable >= atrVal * scaleInAtrMult and volConfirmed
+canScaleInShort = canTrade and strategy.position_size < 0 and math.abs(strategy.position_size) < maxSize and
+     not na(shortFavorable) and shortFavorable >= atrVal * scaleInAtrMult and volConfirmed
+
+if canScaleInLong
+    strategy.entry("Long", strategy.long, qty = addSize, comment = "SCALE IN")
+    lastScalePrice := close
+    stopPrice := close - atrVal
+
+if canScaleInShort
+    strategy.entry("Short", strategy.short, qty = addSize, comment = "SCALE IN")
+    lastScalePrice := close
+    stopPrice := close + atrVal
+
+// ---------------------------------------------------------------------
+// Stop loss (always active, regardless of session, for safety)
+// ---------------------------------------------------------------------
+if strategy.position_size > 0 and close <= stopPrice
+    strategy.close("Long", comment = "STOP")
+
+if strategy.position_size < 0 and close >= stopPrice
+    strategy.close("Short", comment = "STOP")
+
+// ---------------------------------------------------------------------
+// Partial profit taking (always active, regardless of session)
+// ---------------------------------------------------------------------
+target1Long  = lastScalePrice + atrVal * target1AtrMult
+target2Long  = lastScalePrice + atrVal * target2AtrMult
+target1Short = lastScalePrice - atrVal * target1AtrMult
+target2Short = lastScalePrice - atrVal * target2AtrMult
+
+if strategy.position_size > 0 and not target2Hit and close >= target2Long
+    strategy.close("Long", qty_percent = 33, comment = "SCALE OUT T2")
+    target2Hit := true
+    stopPrice := lastScalePrice
+else if strategy.position_size > 0 and not target1Hit and close >= target1Long
+    strategy.close("Long", qty_percent = 33, comment = "SCALE OUT T1")
+    target1Hit := true
+
+if strategy.position_size < 0 and not target2Hit and close <= target2Short
+    strategy.close("Short", qty_percent = 33, comment = "SCALE OUT T2")
+    target2Hit := true
+    stopPrice := lastScalePrice
+else if strategy.position_size < 0 and not target1Hit and close <= target1Short
+    strategy.close("Short", qty_percent = 33, comment = "SCALE OUT T1")
+    target1Hit := true
+
+// ---------------------------------------------------------------------
+// On-chart status table
+// ---------------------------------------------------------------------
+var table statusTable = table.new(position.top_right, 2, 8, border_width = 1)
+if barstate.islast
+    table.cell(statusTable, 0, 0, "Daily P&L", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 0, str.tostring(dailyPnl, "#.##"), bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 1, "Kill Switch", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 1, dailyHalted ? "HALTED" : "Active",
+         bgcolor = color.gray, text_color = dailyHalted ? color.red : color.green)
+    table.cell(statusTable, 0, 2, "Position", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 2, str.tostring(strategy.position_size), bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 3, "In Session", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 3, inSession ? "Yes" : "No", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 4, "ADX (regime)", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 4, str.tostring(adxValue, "#.##") + (regimeTrending ? " (In band)" : " (Out)"),
+         bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 5, "Trend", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 5, uptrend ? "Up" : downtrend ? "Down" : "Flat",
+         bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 6, "Pending Setup", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 6, na(pendingDirection) ? "—" : pendingDirection + " @ " + str.tostring(pendingTrigger, "#.##"),
+         bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 7, "Stop Price", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 7, na(stopPrice) ? "—" : str.tostring(stopPrice, "#.##"),
+         bgcolor = color.gray, text_color = color.white)
