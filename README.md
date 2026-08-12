@@ -47,11 +47,11 @@ As a result, this repo now has two parts:
   have **no real out-of-sample edge** on MNQ/MES. Kept for reference only —
   do not use this one going forward.
 
-- **`jarvis_vwap_pullback_mnq.pine`** — **newest candidate, MNQ only.**
+- **`jarvis_vwap_pullback_mnq.pine`** — **MNQ only, sizing not yet solved.**
   Trend-continuation (opposite mechanism from mean-reversion): trades
   WITH a moderately trending market (ADX in a band, not below a ceiling)
   on pullbacks to VWAP that get rejected and then break out in the trend
-  direction. Now auto-switches its ADX band / trend EMA lengths / stop
+  direction. Auto-switches its ADX band / trend EMA lengths / stop
   multiple based on the chart's timeframe (input "Auto-Adjust Parameters
   By Chart Timeframe", default on) — drop it on a 1m/5m/15m MNQ chart
   without manually changing inputs. **Real TradingView results (June
@@ -59,19 +59,39 @@ As a result, this repo now has two parts:
   - **5-minute**: PF 1.527, 52 trades, $4,928 net — a real signal, but
     **$3,570 max drawdown against the account's confirmed $2,000 EOD
     trailing drawdown limit** at the tested 3/3/9 contract sizing. **Not
-    tradeable at that size as-is.** `backtest_optimizer.py` now searches
-    tighter stop multiples (down to 0.5x ATR) to find a config that
-    holds the edge within the real risk budget — this is the current
-    open item, see below.
-  - **15-minute**: PF ~1.05 with the config found for that timeframe
-    (ADX 20-40, EMA 10/100, stop 2.0x ATR) — essentially breakeven, no
-    real edge. Entries are automatically disabled on 15-minute charts
-    (and on any timeframe other than 5-minute) via a validation gate —
-    the on-chart status table's "Timeframe" row shows green when entries
-    are live, orange when they're disabled pending real confirmation.
+    tradeable at that size as-is.** Tried tightening the stop
+    (`stop_atr_mult` down to 0.5x ATR) in `backtest_optimizer.py` to see
+    if smaller-risk-per-trade would allow more size — **it doesn't**: the
+    0.5x-ATR configs came back OOS PF 0.000 (pure losses). The entries
+    need room; the fix here is size reduction (roughly 1 base/3-4 max
+    contracts at the original 1.5x ATR stop), not a tighter stop. Still
+    needs a re-test at reduced size to confirm.
+  - **15-minute**: real TradingView result was PF ~1.05 (essentially
+    breakeven, no real edge) with the config found for that timeframe
+    (ADX 20-40, EMA 10/100, stop 2.0x ATR). `backtest_optimizer.py`'s own
+    search on this timeframe is unstable (candidates ranging from OOS PF
+    1.3 with drawdown already over the $2,000 limit, to PF 7.4 on just 15
+    trades — the small-sample-luck pattern flagged elsewhere in this
+    README) and doesn't change that read. Entries are automatically
+    disabled on 15-minute charts (and on any timeframe other than
+    5-minute) via a validation gate — the on-chart status table's
+    "Timeframe" row shows green when entries are live, orange when
+    disabled.
   MES was dropped entirely per the same MNQ-only decision as
   mean-reversion. Commission ($1/contract) and slippage (2 ticks) are
   baked into the script.
+- **`jarvis_scalp_vwap_cross_mnq.pine`** — **newest candidate, MNQ only,
+  NOT YET VALIDATED against real TradingView data.** Different mechanism
+  from the other three: fixed point target/stop, single entry,
+  auto-close — no scale-in, no partials, no ATR. Entry on a fresh VWAP
+  cross confirmed by fast EMA momentum + a volume spike.
+  `backtest_optimizer.py` found target=12pts/stop=4-6pts/EMA 9/vol 1.2x
+  on MNQ 5m: OOS PF 1.449, 48 trades, $796 net, $849 max drawdown at 2
+  contracts — the first candidate this session that held up **without**
+  needing a sizing rescue to fit the account's $2,000 drawdown limit.
+  Still only tested on one ~10-week window (see "Getting a longer
+  backtest window" below) — a hold-up on one window is promising, not
+  proof.
 
 ## Active setup: Pine Script + TradingView + PickMyTrade
 
@@ -169,6 +189,51 @@ itself protect against a trailing drawdown accumulated across multiple
 days, so correct position sizing is still the primary defense, not the
 kill switch.
 
+### Getting a longer backtest window
+
+Every `backtest_optimizer.py` result so far is limited to one window:
+Yahoo Finance's own caps are the hard ceiling (`INTERVAL_MAX_RANGE` in
+the script) — **60 days** for 5-minute/15-minute bars, 7 days for
+1-minute. That's not a bug to fix, it's the free data source's real
+limit, and it's why every result in this README says "one window" and
+gets treated as promising-not-proof rather than confirmed. Realistic
+options, roughly cheapest to most involved:
+
+1. **Let time accumulate and re-run periodically.** Each week that
+   passes is another week of real fresh out-of-sample data. Re-running
+   `backtest_optimizer.py` every week or two and keeping a log of the
+   results (which candidates keep holding up vs. which stop doing so)
+   builds an accumulating track record without needing a bigger single
+   pull. This is the free, no-effort option and honestly the most
+   reliable one — a strategy that keeps holding up across several
+   separately-drawn windows over time is stronger evidence than one big
+   backtest ever is.
+2. **Check what TradingView's own chart already shows before assuming
+   you need Premium.** Depending on your plan tier, TradingView may
+   already display more than 60 days of 5-minute MNQ history on the
+   chart itself — if so, you can run the Strategy Tester against that
+   longer range directly, no Deep Backtesting purchase needed. Worth
+   checking before spending anything.
+3. **TradingView Premium's Deep Backtesting** (~$70/mo) — the paid
+   option for full intraday history beyond what your current plan shows.
+   This was already considered once this session and declined given how
+   thin the lead being investigated was at the time; worth reconsidering
+   now that `vwap_pullback` and `scalp` are more developed, but it's a
+   real recurring cost, not a one-time unlock.
+4. **A longer window is already available for free, just at a coarser
+   granularity**: Yahoo's `60m` (hourly) bars go back up to ~2 years,
+   vastly more than the 60-day cap on 5m/15m. None of the current
+   strategies are tuned for hourly bars, so this isn't a drop-in test of
+   what's already been built — but if a strategy idea could reasonably
+   work on an hourly timeframe, this is a free lever nobody has pulled
+   yet.
+5. **A paid intraday data vendor** (e.g. Databento, Polygon, Norgate) —
+   the most capable option (real tick/minute history for years back) but
+   a real integration effort and ongoing cost, not a quick change to
+   `backtest_optimizer.py`. Only worth it if this becomes a long-term,
+   heavily-relied-on tool rather than the current research/validation
+   role it plays.
+
 One important reading note: a candidate can show a "held up" verdict
 with a very small out-of-sample trade count (single digits) if the
 in-sample search found an ultra-narrow combo that rarely fires. **Check
@@ -218,7 +283,8 @@ the same window is how you accidentally curve-fit without meaning to.
 ```
 pinescript/
   jarvis_meanrev_vwap_scaler.pine   # ACTIVE strategy - runs on TradingView
-  jarvis_vwap_pullback_mnq.pine     # newest candidate, MNQ only - not yet validated
+  jarvis_vwap_pullback_mnq.pine     # MNQ only - real edge on 5m, sizing not yet solved
+  jarvis_scalp_vwap_cross_mnq.pine  # newest candidate, MNQ only - not yet validated
   jarvis_orb_vwap_scaler.pine       # ORB - reference only, no edge found
   jarvis_mnq_mes_scaler.pine        # EMA crossover - reference only, no edge found
 
@@ -257,12 +323,18 @@ test_connection.py            # Tradovate direct-API test - only relevant
   it through the updated optimizer (now tracks `max_drawdown` for every
   strategy) and check the same way `vwap_pullback` was checked, since
   it's the currently "active" script in the setup steps above.
-- **`scalp` strategy (10-15 point fixed target, MNQ 1m/5m) is brand new
-  and completely untested** — added to `backtest_optimizer.py` per a
-  request for a quick-scalp approach distinct from the managed
-  multi-bar positions the other strategies hold. No Pine Script exists
-  for it yet and none should be built until it's been through the same
-  walk-forward + TradingView confirmation process as everything else.
+- **`scalp` strategy Pine Script is written but not TradingView-tested** —
+  `jarvis_scalp_vwap_cross_mnq.pine` ports the MNQ 5m walk-forward result
+  (target 12pts/stop 6pts/EMA 9/vol 1.2x, OOS PF 1.449/48 trades/$849 max
+  drawdown) to Pine. This is the next thing to run through TradingView's
+  Strategy Tester — same confirm/refute process as always. 1-minute scalp
+  data was too thin to evaluate at all (2 out-of-sample trades, Yahoo's
+  7-day cap on 1m bars) and isn't a candidate right now.
+- **Every result in this repo is from a single ~10-week backtest window**
+  — see "Getting a longer backtest window" above for real options (none
+  of them free AND unlimited). Treat every "held up out-of-sample"
+  verdict as promising, not proof, until it's been checked against a
+  second, separately-drawn window.
 - **Real risk numbers, partially confirmed** — the account's max trailing
   drawdown is **confirmed at $2,000 (EOD trailing)**, separate from the
   known $1,250 daily loss limit on the $50K Lightning Funded account.

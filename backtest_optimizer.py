@@ -35,19 +35,25 @@ strategy. Supports four entry-signal families:
     trailing drawdown limit, so that exact config is not tradeable as
     sized. 15-minute (ADX 20-40, EMA 10/100 - the config this search
     found) came back PF ~1.05 on real data - no real edge, don't use.
-    Grid now includes tighter stop_atr_mult values (down to 0.5x) to
-    search for a config that holds the 5m edge within the real drawdown
-    budget - see ACCOUNT_TRAILING_DRAWDOWN_LIMIT / DRAWDOWN_SAFETY_BUDGET
-    and the size suggestion printed in the report.
+    Grid now includes tighter stop_atr_mult values (down to 0.5x) -
+    TESTED, and it does NOT work: 0.5x-ATR configs came back OOS PF
+    0.000 (pure losses). The fix for the drawdown problem is reduced
+    size at the original 1.5x ATR stop, not a tighter stop - see
+    ACCOUNT_TRAILING_DRAWDOWN_LIMIT / DRAWDOWN_SAFETY_BUDGET and the
+    size suggestion printed in the report.
   - "scalp": fixed point target/stop, no scale-in/out, auto-close -
     entry on a fresh VWAP cross confirmed by fast EMA momentum and a
-    volume spike. FIRST DRAFT, not yet tested at all (unlike the other
-    three, which all went through at least one walk-forward pass before
-    being trusted or discarded). MNQ only. Small point targets (8-15)
-    mean commission+slippage eat a real percentage of the target - watch
-    the events count and net PnL, not just profit factor, since a target
-    this small needs either a real win-rate edge or it's just noise with
-    a coin-flip mixed in.
+    volume spike. MNQ only. First walk-forward pass (MNQ 5m,
+    target=12pts/stop=4-6pts/EMA 9/vol 1.2x): OOS PF 1.449, 48 trades,
+    $796 net, $849 max drawdown at 2 contracts - held up with a real
+    sample size AND fit inside the drawdown budget without a sizing
+    rescue, unlike vwap_pullback. Ported to Pine
+    (jarvis_scalp_vwap_cross_mnq.pine) - not yet TradingView-confirmed.
+    1-minute scalp data was too thin to evaluate (2 OOS trades, Yahoo's
+    7-day cap on 1m bars). Small point targets (8-15) mean
+    commission+slippage eat a real percentage of the target - watch the
+    events count and net PnL, not just profit factor, on any future
+    result here.
 
 MES was tested on both meanrev and vwap_pullback and dropped entirely
 per user direction - real TradingView results never held up on MES the
