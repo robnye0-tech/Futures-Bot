@@ -189,6 +189,53 @@ itself protect against a trailing drawdown accumulated across multiple
 days, so correct position sizing is still the primary defense, not the
 kill switch.
 
+### Running the research search on a schedule
+
+`research_runner.py` wraps `backtest_optimizer.py` — same search, same
+data, same output — but appends every run's results to a permanent,
+timestamped log (`research_log.txt`, gitignored, stays local to your
+machine) instead of only printing to the console. This is the practical
+version of "let time accumulate and re-run periodically" from the
+section below: run it weekly and you can compare whether the same
+candidates keep showing up, rather than trusting any single pull.
+
+```
+python research_runner.py
+```
+
+**What this does NOT do**, worth being explicit about: it does not touch
+TradingView, does not create or deploy any Pine Script, and does not
+place or suggest a trade. It only re-runs the same local Python search
+against fresh Yahoo Finance data and logs the result. Directly automating
+TradingView itself (auto-generating/deploying Pine Scripts, reading
+Strategy Tester results, "auto-learning" and redeploying) was considered
+and deliberately not built — TradingView has no public API for any of
+that, so the only way to do it would be browser automation clicking
+through the website, which is fragile, likely against TradingView's
+Terms of Service (real risk to the account actually used for trading),
+and would remove the human confirmation step that's caught every
+overfit/oversized candidate in this README so far. Every result from
+`research_runner.py` still needs the same manual TradingView Strategy
+Tester confirmation (profit factor, trade count, max drawdown vs. the
+real $2,000 limit) as everything else here before it's trusted.
+
+To run it automatically on a schedule (Windows Task Scheduler, from
+PowerShell — adjust the paths to match your setup):
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "C:\Users\gamel\Futures-Bot\venv\Scripts\python.exe" `
+    -Argument "research_runner.py" `
+    -WorkingDirectory "C:\Users\gamel\Futures-Bot"
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 6am
+Register-ScheduledTask -TaskName "FuturesBotWeeklyResearch" -Action $action -Trigger $trigger
+```
+
+That registers a task that runs `research_runner.py` every Monday at
+6 AM using the project's venv, appending to `research_log.txt` each
+time. Check `research_log.txt` periodically (or open it directly) to see
+the accumulated history. To remove it later:
+`Unregister-ScheduledTask -TaskName "FuturesBotWeeklyResearch"`.
+
 ### Getting a longer backtest window
 
 Every `backtest_optimizer.py` result so far is limited to one window:

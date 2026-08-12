@@ -7,4 +7,5 @@ runtime_state.json
 runtime_state.json.tmp
 logs/
 *.log
+research_log.txt
 .DS_Store
