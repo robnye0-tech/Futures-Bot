@@ -28,10 +28,31 @@ strategy. Supports four entry-signal families:
   - "vwap_pullback": trend-continuation - the OPPOSITE regime and
     direction from meanrev. Trades WITH a moderate trend (ADX 20-35, not
     range-bound) on pullbacks TO VWAP that hold (a rejection candle),
-    entering on a breakout of that candle's high/low. Newest candidate,
-    not yet validated - logic-verified via an engineered test scenario,
-    but needs a real walk-forward run against actual data before trusting
-    any result from it.
+    entering on a breakout of that candle's high/low. MNQ only (MES
+    dropped, see below). Real TradingView confirmation on the 5-minute
+    default (1.5x ATR stop, 3-9 contracts): PF 1.527, 52 trades, $4,928
+    net - BUT $3,570 max drawdown against the account's real $2,000 EOD
+    trailing drawdown limit, so that exact config is not tradeable as
+    sized. 15-minute (ADX 20-40, EMA 10/100 - the config this search
+    found) came back PF ~1.05 on real data - no real edge, don't use.
+    Grid now includes tighter stop_atr_mult values (down to 0.5x) to
+    search for a config that holds the 5m edge within the real drawdown
+    budget - see ACCOUNT_TRAILING_DRAWDOWN_LIMIT / DRAWDOWN_SAFETY_BUDGET
+    and the size suggestion printed in the report.
+  - "scalp": fixed point target/stop, no scale-in/out, auto-close -
+    entry on a fresh VWAP cross confirmed by fast EMA momentum and a
+    volume spike. FIRST DRAFT, not yet tested at all (unlike the other
+    three, which all went through at least one walk-forward pass before
+    being trusted or discarded). MNQ only. Small point targets (8-15)
+    mean commission+slippage eat a real percentage of the target - watch
+    the events count and net PnL, not just profit factor, since a target
+    this small needs either a real win-rate edge or it's just noise with
+    a coin-flip mixed in.
+
+MES was tested on both meanrev and vwap_pullback and dropped entirely
+per user direction - real TradingView results never held up on MES the
+way they did on MNQ, despite promising signals from this script's own
+search on more than one occasion. MNQ only from here on.
 
 WHY THIS EXISTS: manually tweaking one parameter at a time in TradingView
 and re-testing against the same window is how you accidentally overfit to
@@ -156,8 +177,21 @@ VWAPPB_GRID = dict(
     adx_high=[30, 35, 40],
     trend_fast_len=[10, 20],
     trend_slow_len=[50, 100],
-    stop_atr_mult=[1.0, 1.5, 2.0],
+    # Real TradingView test of the 1.5x-ATR default (MNQ 5m, 3-9 contracts)
+    # came back PF 1.527 / 52 trades but with a $3,570 max drawdown against
+    # a confirmed $2,000 account trailing drawdown limit - tighter stops
+    # are in the grid now specifically to see whether a smaller per-trade
+    # risk can hold the same edge while fitting the real risk budget.
+    stop_atr_mult=[0.5, 0.75, 1.0, 1.5, 2.0],
 )
+
+# Tradeify account's real EOD trailing drawdown limit (user-confirmed) and
+# a conservative safety budget under it - use these to size positions from
+# the risk budget, not from margin/contract-count capacity (margin capacity
+# is a much larger, unrelated ceiling and sizing off it will blow the
+# account on the first bad stretch).
+ACCOUNT_TRAILING_DRAWDOWN_LIMIT = 2000.0
+DRAWDOWN_SAFETY_BUDGET = 1300.0
 
 
 # ---------------------------------------------------------------------
@@ -358,6 +392,25 @@ def _in_session(dt, session_start, session_end):
     return (sh, sm) <= t <= (eh, em)
 
 
+def _max_drawdown(trade_cashflows):
+    """
+    Peak-to-trough drawdown on the CLOSED-TRADE equity curve (cumulative
+    realized cashflows in the order they occurred) - not an intrabar
+    mark-to-market curve. This is the number that matters for a prop
+    account's trailing drawdown rule: a strategy can look great on profit
+    factor alone while still blowing through the account's hard drawdown
+    limit on the way there, which is exactly what real TradingView testing
+    caught (max_drawdown $3,570 against a $2,000 EOD trailing limit on the
+    vwap_pullback 5m/3x9-contract config) - PF was never enough by itself.
+    """
+    equity = peak = max_dd = 0.0
+    for cf in trade_cashflows:
+        equity += cf
+        peak = max(peak, equity)
+        max_dd = max(max_dd, peak - equity)
+    return max_dd
+
+
 def _simulate(bars, symbol, p, entry_signal_fn):
     """
     entry_signal_fn(i, bars, precomputed) -> ("long" | "short" | None)
@@ -462,6 +515,7 @@ def _simulate(bars, symbol, p, entry_signal_fn):
         events=len(trade_cashflows), net_pnl=net,
         gross_profit=gross_profit, gross_loss=gross_loss,
         profit_factor=profit_factor,
+        max_drawdown=_max_drawdown(trade_cashflows),
     )
 
 
@@ -678,6 +732,7 @@ def run_backtest_meanrev(bars, symbol, params):
         events=len(trade_cashflows), net_pnl=net,
         gross_profit=gross_profit, gross_loss=gross_loss,
         profit_factor=profit_factor,
+        max_drawdown=_max_drawdown(trade_cashflows),
     )
 
 
@@ -750,11 +805,122 @@ def run_backtest_vwap_pullback(bars, symbol, params):
     return _simulate(bars, symbol, p, entry_signal)
 
 
+SCALP_DEFAULTS = dict(
+    ema_len=9, vol_len=20, vol_mult=1.5,
+    target_points=12.0, stop_points=6.0,
+    size=2,
+    session_start=(9, 30), session_end=(16, 0),
+    commission_per_contract=1.0,
+    slippage_ticks=2,
+)
+
+SCALP_GRID = dict(
+    target_points=[8.0, 10.0, 12.0, 15.0],
+    stop_points=[4.0, 5.0, 6.0, 8.0],
+    ema_len=[5, 9, 13],
+    vol_mult=[1.2, 1.5, 2.0],
+)
+
+
+# ---------------------------------------------------------------------
+# Strategy 5: Quick scalp - fixed point target/stop, auto-close, no
+# scale-in/out (in and out fast, not a position to manage over time).
+#
+# FIRST DRAFT - not yet walk-forward tested, unlike the other strategies
+# when they were first added. Entry: a fresh VWAP cross (not an extended
+# one - crossing THIS bar) that closes on the fast-EMA-confirmed momentum
+# side, with a volume spike. Exit: fixed point target or fixed point stop,
+# whichever hits first - no ATR, no scaling, no partials, since the whole
+# point is fast in/out, not a managed multi-bar position.
+#
+# Cost check worth keeping in mind before trusting any result here: MNQ is
+# $2/point. A 10-12 point target is $20-24/contract gross before costs -
+# commission ($1/side = $2 round trip) and 2-tick slippage each way (2 *
+# 0.25 * 2 = $2 round trip in point terms is $1, so ~$2 in $ terms at
+# $2/point) eat a real percentage of a target this small. Small targets
+# need either a high win rate or a real cost edge to survive - don't
+# assume this works just because the OOS number says PF > 1 on a handful
+# of trades; the events count matters more here than almost anywhere else.
+# ---------------------------------------------------------------------
+def run_backtest_scalp(bars, symbol, params):
+    p = {**SCALP_DEFAULTS, **params}
+    closes = [b["close"] for b in bars]
+    volumes = [b["volume"] for b in bars]
+
+    vwap = vwap_series(bars)
+    fast_ema = ema_series(closes, p["ema_len"])
+    avg_vol = sma_series(volumes, p["vol_len"])
+
+    point_value = POINT_VALUE[symbol]
+    slippage_price = TICK_SIZE[symbol] * p["slippage_ticks"]
+
+    position = None
+    trade_cashflows = []
+
+    def close_qty(direction, qty, price, avg_entry):
+        fill_price = price - slippage_price if direction == "long" else price + slippage_price
+        per_contract = (fill_price - avg_entry) if direction == "long" else (avg_entry - fill_price)
+        trade_cashflows.append(per_contract * point_value * qty - p["commission_per_contract"] * qty)
+
+    for i in range(1, len(bars)):
+        if vwap[i] is None or vwap[i - 1] is None or fast_ema[i] is None or avg_vol[i] is None:
+            continue
+
+        dt = bars[i]["dt"]
+        price = closes[i]
+        vol_confirmed = volumes[i] > avg_vol[i] * p["vol_mult"]
+        can_trade = _in_session(dt, p["session_start"], p["session_end"])
+
+        if position is not None:
+            direction = position["direction"]
+            hit_target = (direction == "long" and price >= position["target"]) or \
+                         (direction == "short" and price <= position["target"])
+            hit_stop = (direction == "long" and price <= position["stop"]) or \
+                       (direction == "short" and price >= position["stop"])
+            if hit_target or hit_stop:
+                close_qty(direction, position["size"], price, position["avg_entry"])
+                position = None
+            continue
+
+        if not can_trade:
+            continue
+
+        fresh_cross_up = closes[i - 1] <= vwap[i - 1] and price > vwap[i] and price > fast_ema[i]
+        fresh_cross_down = closes[i - 1] >= vwap[i - 1] and price < vwap[i] and price < fast_ema[i]
+
+        if fresh_cross_up and vol_confirmed:
+            fill_price = price + slippage_price
+            position = dict(direction="long", size=p["size"], avg_entry=fill_price,
+                             target=price + p["target_points"], stop=price - p["stop_points"])
+            trade_cashflows.append(-p["commission_per_contract"] * p["size"])
+        elif fresh_cross_down and vol_confirmed:
+            fill_price = price - slippage_price
+            position = dict(direction="short", size=p["size"], avg_entry=fill_price,
+                             target=price - p["target_points"], stop=price + p["stop_points"])
+            trade_cashflows.append(-p["commission_per_contract"] * p["size"])
+
+    gross_profit = sum(c for c in trade_cashflows if c > 0)
+    gross_loss = -sum(c for c in trade_cashflows if c < 0)
+    net = sum(trade_cashflows)
+    if gross_loss > 0:
+        profit_factor = gross_profit / gross_loss
+    else:
+        profit_factor = float("inf") if gross_profit > 0 else 0.0
+
+    return dict(
+        events=len(trade_cashflows), net_pnl=net,
+        gross_profit=gross_profit, gross_loss=gross_loss,
+        profit_factor=profit_factor,
+        max_drawdown=_max_drawdown(trade_cashflows),
+    )
+
+
 STRATEGIES = {
     "crossover": dict(run=run_backtest_crossover, grid=CROSSOVER_GRID, group_by=("fast_len", "slow_len")),
     "orb": dict(run=run_backtest_orb, grid=ORB_GRID, group_by=("adx_threshold",)),
     "meanrev": dict(run=run_backtest_meanrev, grid=MEANREV_GRID, group_by=("use_trend_alignment", "use_obv_confirm")),
     "vwap_pullback": dict(run=run_backtest_vwap_pullback, grid=VWAPPB_GRID, group_by=("adx_low", "adx_high")),
+    "scalp": dict(run=run_backtest_scalp, grid=SCALP_GRID, group_by=("target_points", "stop_points")),
 }
 
 
@@ -770,6 +936,19 @@ def grid_search(bars_in_sample, symbol, run_fn, grid):
         stats = run_fn(bars_in_sample, symbol, params)
         results.append((params, stats))
     return results
+
+
+def suggest_size_for_budget(max_drawdown, base_size, max_size, budget=DRAWDOWN_SAFETY_BUDGET):
+    """
+    Rough linear-scaling estimate only - drawdown scales with position size
+    because the entry/exit price logic doesn't change, but this is NOT a
+    substitute for re-running the backtest at the suggested size. Treat it
+    as a starting point to test, not a validated answer.
+    """
+    if max_drawdown <= 0:
+        return base_size, max_size
+    scale = min(1.0, budget / max_drawdown)
+    return max(1, round(base_size * scale)), max(1, round(max_size * scale))
 
 
 def robust_candidates(results, group_by, top_n=3):
@@ -832,24 +1011,52 @@ def run_for(symbol, interval, strategy_name):
               f"(in-sample median PF across variants: {median_pf:.3f})")
         print(f"      Best in-sample combo: {best_params}")
         print(f"      In-sample result: PF={best_in_sample_stats['profit_factor']:.3f}  "
-              f"events={best_in_sample_stats['events']}  net=${best_in_sample_stats['net_pnl']:.2f}")
+              f"events={best_in_sample_stats['events']}  net=${best_in_sample_stats['net_pnl']:.2f}  "
+              f"max_drawdown=${best_in_sample_stats['max_drawdown']:.2f}")
 
         oos_stats = strat["run"](out_sample, symbol, best_params)
         print(f"      OUT-OF-SAMPLE result: PF={oos_stats['profit_factor']:.3f}  "
-              f"events={oos_stats['events']}  net=${oos_stats['net_pnl']:.2f}")
+              f"events={oos_stats['events']}  net=${oos_stats['net_pnl']:.2f}  "
+              f"max_drawdown=${oos_stats['max_drawdown']:.2f}")
         if oos_stats["profit_factor"] >= 1.0:
             print("      -> Held up out-of-sample. Worth taking to TradingView for final confirmation.")
         else:
             print("      -> Did NOT hold up out-of-sample. Treat the in-sample number as noise, not edge.")
 
+        base_size = best_params.get("base_size", SHARED_DEFAULTS["base_size"])
+        max_size = best_params.get("max_size", SHARED_DEFAULTS["max_size"])
+        if oos_stats["max_drawdown"] > DRAWDOWN_SAFETY_BUDGET:
+            sug_base, sug_max = suggest_size_for_budget(oos_stats["max_drawdown"], base_size, max_size)
+            print(f"      !! max_drawdown ${oos_stats['max_drawdown']:.2f} exceeds the "
+                  f"${DRAWDOWN_SAFETY_BUDGET:.0f} safety budget (real account trailing "
+                  f"drawdown limit: ${ACCOUNT_TRAILING_DRAWDOWN_LIMIT:.0f}).")
+            print(f"      -> Rough linear-scaling suggestion: base_size={sug_base}, "
+                  f"max_size={sug_max} (was {base_size}/{max_size}). RE-RUN at this size to "
+                  f"confirm, don't just trust the scaling math - stop-loss noise doesn't scale"
+                  f" perfectly linearly in practice.")
+
 
 def main():
-    # meanrev (MNQ 5m specifically) already has real TradingView confirmation
-    # - see README. Testing the new vwap_pullback candidate now. Change the
-    # strategy name below (or add a second loop) to re-run meanrev/orb/crossover.
-    for symbol in ["MNQ=F", "MES=F"]:
-        for interval in ["5m", "15m"]:
-            run_for(symbol, interval, "vwap_pullback")
+    # MES dropped entirely per real TradingView results (meanrev held up on
+    # MNQ 5m, did not hold up on MES 5m) - MNQ only from here on.
+    #
+    # vwap_pullback: real TradingView test of the 5m default (1.5x ATR
+    # stop, 3-9 contracts) came back PF 1.527 / 52 trades / $4,928 net but
+    # with a $3,570 max drawdown against the account's real $2,000 EOD
+    # trailing drawdown limit - re-running now with the widened
+    # stop_atr_mult grid (down to 0.5x) to see if a tighter stop holds the
+    # same edge at a size that actually fits the account. Also re-checking
+    # 15m, though a first real TradingView pass on 15m already came back
+    # PF ~1.05 (no real edge) with the corrected ADX 20-40/EMA 10-100
+    # inputs - don't expect that one to improve just from a tighter stop.
+    for interval in ["5m", "15m"]:
+        run_for("MNQ=F", interval, "vwap_pullback")
+
+    # scalp: first-draft fixed-point-target strategy, not yet tested at
+    # all. Running 1m and 5m to see if either produces a real signal
+    # before ever considering a Pine version.
+    for interval in ["1m", "5m"]:
+        run_for("MNQ=F", interval, "scalp")
 
 
 if __name__ == "__main__":

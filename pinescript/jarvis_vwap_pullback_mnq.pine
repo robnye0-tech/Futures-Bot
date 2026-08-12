@@ -14,16 +14,37 @@
 // and inconsistent - consistent with the earlier mean-reversion finding
 // that MES doesn't hold up the way MNQ does. Don't run this on MES.
 //
-// Two candidate configs found in walk-forward testing (adjust inputs
-// per timeframe - defaults below match the 5-minute config):
+// Two candidate configs found in walk-forward testing:
 //   5-minute:  ADX 15-30, trend EMA 10/50,  stop 1.5x ATR
 //   15-minute: ADX 20-40, trend EMA 10/100, stop 2.0x ATR
 //
-// NOT YET VALIDATED against real TradingView data - this is the next
-// step, the same process used to confirm (and in MES's case, refute)
-// the mean-reversion strategy. Do not treat this as trustworthy until
-// it's been tested here with real commission/slippage and a real
-// sample size, the same way jarvis_meanrev_vwap_scaler.pine was.
+// REAL TradingView RESULTS (June 18 - Aug 12 window, 3/3/9 contract
+// sizing):
+//   5-minute:  PF 1.527, 52 trades, $4,928 net - BUT $3,570 max drawdown
+//              against the account's real $2,000 EOD trailing drawdown
+//              limit. Not tradeable at this size as-is - see
+//              backtest_optimizer.py (widened stop_atr_mult grid down to
+//              0.5x, plus a size suggestion in the report) for finding a
+//              config that holds the edge within the real risk budget.
+//   15-minute: PF ~1.05 with the corrected inputs above - no real edge.
+//              Kept wired into the auto-timeframe switch below for
+//              reference only; entries are DISABLED on 15m charts.
+//
+// Auto-timeframe switching (input "Auto-Adjust Parameters By Chart
+// Timeframe", default on): the script detects timeframe.period and
+// switches ADX band / trend EMA lengths / stop multiple automatically -
+// you should be able to drop this on a 1m, 5m, or 15m MNQ chart without
+// touching inputs. IMPORTANT: this does NOT mean every timeframe is safe
+// to trade - only 5-minute has a real confirmed edge as of this build.
+// 15-minute and any other timeframe (including 1-minute, not yet tested
+// at all) have entries disabled via the tfValidated gate; the on-chart
+// status table's "Timeframe" row shows which state you're in. Turn the
+// auto-adjust input off to force the manual inputs on any timeframe.
+//
+// Still NOT ready for live/demo trading even on 5-minute until the
+// sizing/drawdown question above is resolved - this is the next step,
+// the same process used to confirm (and in MES's case, refute) the
+// mean-reversion strategy.
 //
 // This strategy is meant to be run on a TradingView chart (load MNQ1!
 // continuous futures), with its order-fill alerts wired to PickMyTrade
@@ -76,6 +97,9 @@ sessionEndMin    = input.int(0, "Session End Minute (ET)")
 
 dailyKillUSD = input.float(900, "Daily Kill Switch ($) - placeholder, confirm real Tradeify drawdown figure")
 
+autoAdjustByTimeframe = input.bool(true, "Auto-Adjust Parameters By Chart Timeframe",
+     tooltip = "When on, ADX band / trend EMA lengths / stop multiple switch automatically based on the chart's timeframe using the configs found in walk-forward + TradingView testing, instead of the manual inputs above. Timeframes without a real confirmed edge (currently: everything except 5-minute) have entries DISABLED even in auto mode - see the 'Timeframe' status row (green = validated, orange = entries disabled). Turn this off to force the manual inputs above on any timeframe (you are then asserting those values yourself).")
+
 // ---------------------------------------------------------------------
 // Session helpers (ET) - plain minute-of-day arithmetic
 // ---------------------------------------------------------------------
@@ -99,10 +123,57 @@ volConfirmed = volume > (avgVol * volMult)
 
 vwapValue = ta.vwap(hlc3)
 [diPlus, diMinus, adxValue] = ta.dmi(adxLen, adxLen)
-regimeTrending = adxValue >= adxLow and adxValue <= adxHigh
 
-trendFastEma = ta.ema(close, trendFastLen)
-trendSlowEma = ta.ema(close, trendSlowLen)
+// ---------------------------------------------------------------------
+// Per-timeframe config switching. ta.ema requires a fixed (non-series)
+// length, so every candidate EMA length is precomputed here as its own
+// call, and the switch below only SELECTS among already-computed series -
+// it never feeds a runtime-varying length into ta.ema itself.
+//
+// Only the 5-minute config has real TradingView-confirmed edge as of this
+// build (PF 1.527, 52 trades - see repo README). 15-minute was tested
+// with its own found config (ADX 20-40, EMA 10/100, stop 2.0x ATR) and
+// came back PF ~1.05 on real data - no real edge, so it stays wired up
+// here for reference but marked NOT validated. Any other timeframe (1m,
+// etc.) has not been tested at all. tfValidated gates new entries so
+// switching charts never silently trades an unconfirmed setup.
+// ---------------------------------------------------------------------
+ema10  = ta.ema(close, 10)
+ema50  = ta.ema(close, 50)
+ema100 = ta.ema(close, 100)
+emaFastManual = ta.ema(close, trendFastLen)
+emaSlowManual = ta.ema(close, trendSlowLen)
+
+float effAdxLow  = adxLow
+float effAdxHigh = adxHigh
+float effStopAtrMult = stopAtrMult
+float trendFastEma = emaFastManual
+float trendSlowEma = emaSlowManual
+bool  tfValidated = true
+string tfLabel = "Manual"
+
+if autoAdjustByTimeframe
+    if timeframe.period == "5"
+        effAdxLow := 15.0
+        effAdxHigh := 30.0
+        effStopAtrMult := 1.5
+        trendFastEma := ema10
+        trendSlowEma := ema50
+        tfValidated := true
+        tfLabel := "5m (validated)"
+    else if timeframe.period == "15"
+        effAdxLow := 20.0
+        effAdxHigh := 40.0
+        effStopAtrMult := 2.0
+        trendFastEma := ema10
+        trendSlowEma := ema100
+        tfValidated := false
+        tfLabel := "15m (NOT validated - PF ~1.05 on real data)"
+    else
+        tfValidated := false
+        tfLabel := timeframe.period + " (untested)"
+
+regimeTrending = adxValue >= effAdxLow and adxValue <= effAdxHigh
 uptrend   = trendFastEma > trendSlowEma
 downtrend = trendFastEma < trendSlowEma
 
@@ -126,7 +197,7 @@ if dailyPnl <= -dailyKillUSD and not dailyHalted
     strategy.close_all(comment = "DAILY KILL SWITCH")
     dailyHalted := true
 
-canTrade = inSession and not dailyHalted
+canTrade = inSession and not dailyHalted and tfValidated
 
 // ---------------------------------------------------------------------
 // Per-position state (reset whenever flat)
@@ -145,7 +216,7 @@ if strategy.position_size == 0
 if strategy.position_size != 0 and na(lastScalePrice)
     lastScalePrice := strategy.position_avg_price
     stopPrice := strategy.position_size > 0 ?
-         close - atrVal * stopAtrMult : close + atrVal * stopAtrMult
+         close - atrVal * effStopAtrMult : close + atrVal * effStopAtrMult
 
 // ---------------------------------------------------------------------
 // Pending setup tracking: a rejection candle sets a pending breakout
@@ -161,7 +232,7 @@ if strategy.position_size == 0 and canTrade
         if high >= pendingTrigger
             strategy.entry("Long", strategy.long, qty = baseSize, comment = "PULLBACK LONG")
             lastScalePrice := close
-            stopPrice := close - atrVal * stopAtrMult
+            stopPrice := close - atrVal * effStopAtrMult
             pendingDirection := na
         else
             pendingBarsLeft := pendingBarsLeft - 1
@@ -171,7 +242,7 @@ if strategy.position_size == 0 and canTrade
         if low <= pendingTrigger
             strategy.entry("Short", strategy.short, qty = baseSize, comment = "PULLBACK SHORT")
             lastScalePrice := close
-            stopPrice := close + atrVal * stopAtrMult
+            stopPrice := close + atrVal * effStopAtrMult
             pendingDirection := na
         else
             pendingBarsLeft := pendingBarsLeft - 1
@@ -246,26 +317,28 @@ else if strategy.position_size < 0 and not target1Hit and close <= target1Short
 // ---------------------------------------------------------------------
 // On-chart status table
 // ---------------------------------------------------------------------
-var table statusTable = table.new(position.top_right, 2, 8, border_width = 1)
+var table statusTable = table.new(position.top_right, 2, 9, border_width = 1)
 if barstate.islast
-    table.cell(statusTable, 0, 0, "Daily P&L", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 1, 0, str.tostring(dailyPnl, "#.##"), bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 0, 1, "Kill Switch", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 1, 1, dailyHalted ? "HALTED" : "Active",
+    table.cell(statusTable, 0, 0, "Timeframe", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 0, tfLabel, bgcolor = color.gray, text_color = tfValidated ? color.green : color.orange)
+    table.cell(statusTable, 0, 1, "Daily P&L", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 1, str.tostring(dailyPnl, "#.##"), bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 2, "Kill Switch", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 2, dailyHalted ? "HALTED" : "Active",
          bgcolor = color.gray, text_color = dailyHalted ? color.red : color.green)
-    table.cell(statusTable, 0, 2, "Position", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 1, 2, str.tostring(strategy.position_size), bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 0, 3, "In Session", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 1, 3, inSession ? "Yes" : "No", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 0, 4, "ADX (regime)", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 1, 4, str.tostring(adxValue, "#.##") + (regimeTrending ? " (In band)" : " (Out)"),
+    table.cell(statusTable, 0, 3, "Position", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 3, str.tostring(strategy.position_size), bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 4, "In Session", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 4, inSession ? "Yes" : "No", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 5, "ADX (regime)", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 5, str.tostring(adxValue, "#.##") + (regimeTrending ? " (In band)" : " (Out)"),
          bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 0, 5, "Trend", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 1, 5, uptrend ? "Up" : downtrend ? "Down" : "Flat",
+    table.cell(statusTable, 0, 6, "Trend", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 6, uptrend ? "Up" : downtrend ? "Down" : "Flat",
          bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 0, 6, "Pending Setup", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 1, 6, na(pendingDirection) ? "—" : pendingDirection + " @ " + str.tostring(pendingTrigger, "#.##"),
+    table.cell(statusTable, 0, 7, "Pending Setup", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 7, na(pendingDirection) ? "—" : pendingDirection + " @ " + str.tostring(pendingTrigger, "#.##"),
          bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 0, 7, "Stop Price", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 1, 7, na(stopPrice) ? "—" : str.tostring(stopPrice, "#.##"),
+    table.cell(statusTable, 0, 8, "Stop Price", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 8, na(stopPrice) ? "—" : str.tostring(stopPrice, "#.##"),
          bgcolor = color.gray, text_color = color.white)

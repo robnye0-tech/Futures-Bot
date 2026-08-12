@@ -47,21 +47,31 @@ As a result, this repo now has two parts:
   have **no real out-of-sample edge** on MNQ/MES. Kept for reference only —
   do not use this one going forward.
 
-- **`jarvis_vwap_pullback_mnq.pine`** — **newest candidate, MNQ only, NOT
-  YET VALIDATED against real TradingView data.** Trend-continuation
-  (opposite mechanism from mean-reversion): trades WITH a moderately
-  trending market (ADX in a band, not below a ceiling) on pullbacks to
-  VWAP that get rejected and then break out in the trend direction.
-  `backtest_optimizer.py`'s walk-forward search found signal on MNQ at
-  both 5-minute (ADX 15-30, trend EMA 10/50, stop 1.5x ATR — the script's
-  defaults) and 15-minute (ADX 20-40, trend EMA 10/100, stop 2.0x ATR —
-  adjust the inputs if testing this timeframe). MES was explicitly
-  dropped from consideration per the same MNQ-only decision as
-  mean-reversion, without waiting for MES numbers here — MNQ is the
-  focus going forward. Commission ($1/contract) and slippage (2 ticks)
-  are baked into the script. **Do not treat this as trustworthy until
-  it's been run through TradingView's Strategy Tester on real data,
-  the same confirm/refute process used for mean-reversion.**
+- **`jarvis_vwap_pullback_mnq.pine`** — **newest candidate, MNQ only.**
+  Trend-continuation (opposite mechanism from mean-reversion): trades
+  WITH a moderately trending market (ADX in a band, not below a ceiling)
+  on pullbacks to VWAP that get rejected and then break out in the trend
+  direction. Now auto-switches its ADX band / trend EMA lengths / stop
+  multiple based on the chart's timeframe (input "Auto-Adjust Parameters
+  By Chart Timeframe", default on) — drop it on a 1m/5m/15m MNQ chart
+  without manually changing inputs. **Real TradingView results (June
+  18–Aug 12 window):**
+  - **5-minute**: PF 1.527, 52 trades, $4,928 net — a real signal, but
+    **$3,570 max drawdown against the account's confirmed $2,000 EOD
+    trailing drawdown limit** at the tested 3/3/9 contract sizing. **Not
+    tradeable at that size as-is.** `backtest_optimizer.py` now searches
+    tighter stop multiples (down to 0.5x ATR) to find a config that
+    holds the edge within the real risk budget — this is the current
+    open item, see below.
+  - **15-minute**: PF ~1.05 with the config found for that timeframe
+    (ADX 20-40, EMA 10/100, stop 2.0x ATR) — essentially breakeven, no
+    real edge. Entries are automatically disabled on 15-minute charts
+    (and on any timeframe other than 5-minute) via a validation gate —
+    the on-chart status table's "Timeframe" row shows green when entries
+    are live, orange when they're disabled pending real confirmation.
+  MES was dropped entirely per the same MNQ-only decision as
+  mean-reversion. Commission ($1/contract) and slippage (2 ticks) are
+  baked into the script.
 
 ## Active setup: Pine Script + TradingView + PickMyTrade
 
@@ -114,18 +124,50 @@ What it does:
    trust** — if profit factor holds above 1.0 there, it's a real signal;
    if it collapses, the in-sample result was noise.
 
-It supports four strategy families (`crossover`, `orb`, `meanrev`,
-`vwap_pullback` — see `STRATEGIES` dict in the script). `main()`
-currently runs `vwap_pullback` (the newest, not-yet-validated
-trend-continuation candidate — opposite regime/direction from `meanrev`:
-trades WITH a moderately trending market, ADX 20-35, on pullbacks TO
-VWAP that hold, instead of fading extremes away from it in range-bound
-conditions). `meanrev`'s best result (MNQ 5m) already has real
-TradingView confirmation — see the Pine Script section above — so it's
-not the current priority to keep re-running, though the code is still
-there (`run_for(symbol, interval, "meanrev")`). `crossover` and `orb`
-are kept only for reference; both have already been tested and shown to
-lack real out-of-sample edge.
+It supports five strategy families (`crossover`, `orb`, `meanrev`,
+`vwap_pullback`, `scalp` — see `STRATEGIES` dict in the script). `main()`
+currently runs, MNQ only (MES dropped):
+- `vwap_pullback` on 5m/15m — re-running with a widened `stop_atr_mult`
+  grid (down to 0.5x ATR) to find a config that holds the real 5-minute
+  edge (PF 1.527 confirmed on TradingView) within the account's real
+  $2,000 drawdown budget, since the tested 3/3/9-contract config drew
+  down $3,570 — see Pine Script section above and "Position sizing"
+  below.
+- `scalp` on 1m/5m — a new, **untested** fixed-point-target strategy
+  (10-15 point target, tight stop, auto-close, no scale-in/out) for a
+  quick-in-quick-out approach, as opposed to the managed multi-bar
+  positions the other three strategies hold. Entry: a fresh VWAP cross
+  confirmed by fast EMA momentum + a volume spike. Small targets mean
+  commission+slippage eat a real percentage of the target, so treat any
+  promising-looking PF here with extra skepticism until the events count
+  and net PnL are checked, not just the ratio.
+
+`meanrev`'s best result (MNQ 5m) already has real TradingView
+confirmation — see the Pine Script section above — but **its max
+drawdown against the real $2,000 limit has never been checked**, unlike
+`vwap_pullback` (see "Position sizing" below) — this is an open item.
+`crossover` and `orb` are kept only for reference; both have already
+been tested and shown to lack real out-of-sample edge.
+
+### Position sizing: size from the drawdown budget, not from margin capacity
+
+The account allows up to 40 MNQ contracts on margin, but that number is
+irrelevant to position sizing here — the account's real constraint is a
+**$2,000 EOD trailing drawdown limit** (confirmed), which is a much
+tighter ceiling. `_max_drawdown()` in `backtest_optimizer.py` now tracks
+peak-to-trough drawdown on the closed-trade equity curve for every
+strategy, and the report flags any candidate whose out-of-sample max
+drawdown exceeds `DRAWDOWN_SAFETY_BUDGET` ($1,300 — a buffer below the
+real $2,000 limit, not the limit itself) with a rough linear-scaling size
+suggestion (`suggest_size_for_budget()`). Treat that suggestion as a
+starting point to re-test, not a validated answer — drawdown scales
+roughly with contract count since the entry/exit price logic doesn't
+change, but stop-loss noise doesn't scale perfectly linearly in practice.
+The daily kill switch (`dailyKillUSD`, currently a $900 placeholder in
+both Pine scripts) only halts a single bad day — it does **not** by
+itself protect against a trailing drawdown accumulated across multiple
+days, so correct position sizing is still the primary defense, not the
+kill switch.
 
 One important reading note: a candidate can show a "held up" verdict
 with a very small out-of-sample trade count (single digits) if the
@@ -201,18 +243,36 @@ test_connection.py            # Tradovate direct-API test - only relevant
   and 2.75 to confirm it's a real neighborhood and not a lucky single
   value) or confirmed on a different, non-overlapping date range. Treat
   2.5 as promising but unconfirmed until both checks are done.
-- **`vwap_pullback` Pine Script (`jarvis_vwap_pullback_mnq.pine`) is
-  written but untested against real data** — the walk-forward search in
-  `backtest_optimizer.py` found MNQ signal at 5m and 15m, and the logic
-  has been ported to Pine with commission/slippage baked in, but it has
-  not yet been run through TradingView's Strategy Tester on real data.
-  Do this next, the same way mean-reversion was confirmed (and MES was
-  refuted) — a promising Python search result is not proof by itself.
-- **Confirm real risk numbers** — `dailyKillUSD` in the Pine Script (and
-  `RISK_PER_TRADE_USD` / `DAILY_KILL_SWITCH_USD` in `config.py`) are
-  conservative placeholders. Confirm Tradeify's actual max trailing
-  drawdown figure (separate from the known $1,250 daily loss limit on the
-  $50K Lightning Funded account) and update these before trading real size.
+- **`vwap_pullback` MNQ 5-minute needs a sizing fix before it's tradeable**
+  — real TradingView result was PF 1.527 / 52 trades / $4,928 net (real
+  signal) but $3,570 max drawdown against the confirmed $2,000 account
+  limit at 3/3/9 contract sizing. Run the updated `backtest_optimizer.py`
+  (widened `stop_atr_mult` grid, drawdown-aware size suggestion in the
+  report) locally, then confirm whichever config it suggests in
+  TradingView before trusting it. 15-minute has no real edge (PF ~1.05)
+  and is disabled by default via the Pine script's timeframe gate.
+- **`meanrev`'s max drawdown has never been checked against the real
+  $2,000 limit** — it was confirmed on profit factor alone (PF
+  1.185–1.403) before the account's real drawdown limit was known. Run
+  it through the updated optimizer (now tracks `max_drawdown` for every
+  strategy) and check the same way `vwap_pullback` was checked, since
+  it's the currently "active" script in the setup steps above.
+- **`scalp` strategy (10-15 point fixed target, MNQ 1m/5m) is brand new
+  and completely untested** — added to `backtest_optimizer.py` per a
+  request for a quick-scalp approach distinct from the managed
+  multi-bar positions the other strategies hold. No Pine Script exists
+  for it yet and none should be built until it's been through the same
+  walk-forward + TradingView confirmation process as everything else.
+- **Real risk numbers, partially confirmed** — the account's max trailing
+  drawdown is **confirmed at $2,000 (EOD trailing)**, separate from the
+  known $1,250 daily loss limit on the $50K Lightning Funded account.
+  `dailyKillUSD` (currently a $900 placeholder in the Pine Scripts) only
+  guards a single day, not the cumulative trailing drawdown — see
+  "Position sizing" above for how the $2,000 figure is actually being
+  used (position sizing, not just the kill switch). Update `dailyKillUSD`
+  / `RISK_PER_TRADE_USD` / `DAILY_KILL_SWITCH_USD` (`config.py`) to real
+  values before trading real size, but don't treat the kill switch alone
+  as sufficient protection.
 - **Prop firm automation policy** — Tradeify's stated policy allows personal
   bots/scripts that are solely owned, not shared, and not HFT, plus a
   "microscalping rule" requiring over 50% of trades/profit to come from
