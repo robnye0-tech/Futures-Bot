@@ -43,17 +43,37 @@ strategy. Supports four entry-signal families:
     size suggestion printed in the report.
   - "scalp": fixed point target/stop, no scale-in/out, auto-close -
     entry on a fresh VWAP cross confirmed by fast EMA momentum and a
-    volume spike. MNQ only. First walk-forward pass (MNQ 5m,
-    target=12pts/stop=4-6pts/EMA 9/vol 1.2x): OOS PF 1.449, 48 trades,
-    $796 net, $849 max drawdown at 2 contracts - held up with a real
-    sample size AND fit inside the drawdown budget without a sizing
-    rescue, unlike vwap_pullback. Ported to Pine
-    (jarvis_scalp_vwap_cross_mnq.pine) - not yet TradingView-confirmed.
-    1-minute scalp data was too thin to evaluate (2 OOS trades, Yahoo's
-    7-day cap on 1m bars). Small point targets (8-15) mean
-    commission+slippage eat a real percentage of the target - watch the
-    events count and net PnL, not just profit factor, on any future
-    result here.
+    volume spike. MNQ only. This script's own search (MNQ 5m,
+    target=12pts/stop=4-6pts/EMA 9/vol 1.2x) showed OOS PF 1.449, 48
+    trades, $849 max drawdown - looked real. Real TradingView result on
+    the same config: PF 1.067, win rate 34.69% (barely above the
+    mathematical breakeven of 33.3% for its own 2:1 reward:risk), equity
+    curve gave back 80%+ of its peak by the end of the test - NO REAL
+    EDGE. Same failure pattern as MES mean-reversion: this script's
+    approximation overstated it, real fills didn't back it up. DEAD -
+    don't pursue this exact config further.
+  - "liquidity_sweep": swing-trade, multi-timeframe confluence - 4-hour
+    structure (liquidity pools = rolling N-bar high/low, built by
+    resampling 60-minute bars since Yahoo has no native 4h interval) for
+    the setup, 1-hour for the entry trigger. A "sweep" is a 4h bar whose
+    high/low exceeds the recent N-bar extreme AND closes back inside it
+    (rejection) - same rejection-then-breakout shape as vwap_pullback,
+    just applied to a rolling price extreme instead of VWAP, and to 4h
+    structure instead of same-timeframe. Entry triggers on a 1h close
+    beyond ITS OWN recent N-bar extreme in the reversal direction (break
+    of structure). No fixed take-profit - the stop trails to newly-formed
+    1h structure in the trade's favor instead. Position size (1-5
+    contracts, per user's stated range) is computed FROM the stop
+    distance to target a fixed risk_pct of a $2,000 CASH account (a
+    different account from the Tradeify prop account and its $2,000
+    trailing drawdown limit - same number, unrelated accounts, don't
+    conflate them) - risk_pct defaults to 1% ($20/trade), NOT the
+    originally-proposed 20% ($400/trade), which would risk account ruin
+    in ~5 losing trades even at a real-world win rate. Uses 60-minute
+    data, which Yahoo allows up to ~2 years back - a much longer real
+    backtest window than any 5m/15m strategy here has ever gotten.
+    Brand new, completely untested - first walk-forward pass needed
+    before this is anything but a hypothesis.
 
 MES was tested on both meanrev and vwap_pullback and dropped entirely
 per user direction - real TradingView results never held up on MES the
@@ -385,6 +405,57 @@ def opening_range_series(bars, or_minutes, session_start):
         else:
             out.append((or_high, or_low, True))
     return out
+
+
+def resample_bars(bars, group_size):
+    """
+    Groups every `group_size` CONSECUTIVE bars into one larger bar - used
+    to build 4-hour bars from 60-minute ones (Yahoo has no native 4h
+    interval). NOT calendar-anchored (a 4h group doesn't necessarily start
+    at 00:00/04:00/08:00 UTC) - just non-overlapping consecutive chunks.
+    Good enough for a research tool; a real TradingView 4h chart would be
+    clock-aligned, which is one more reason this needs real confirmation
+    before being trusted, same as everything else here.
+
+    Returns (resampled_bars, end_indices) where end_indices[k] is the
+    index in the ORIGINAL `bars` list of the last bar included in
+    resampled_bars[k] - this is what lets the caller know exactly which
+    original-timeframe bar a resampled bar's information first becomes
+    knowable at (no earlier - avoiding lookahead bias is the whole point
+    of tracking this).
+    """
+    resampled = []
+    end_indices = []
+    for start in range(0, len(bars) - group_size + 1, group_size):
+        group = bars[start:start + group_size]
+        resampled.append({
+            "dt": group[0]["dt"],
+            "open": group[0]["open"],
+            "high": max(b["high"] for b in group),
+            "low": min(b["low"] for b in group),
+            "close": group[-1]["close"],
+            "volume": sum(b["volume"] for b in group),
+        })
+        end_indices.append(start + group_size - 1)
+    return resampled, end_indices
+
+
+def rolling_high_low(values_high, values_low, lookback):
+    """
+    For each index i, the max/min over the `lookback` bars BEFORE i
+    (excluding i itself) - None until enough history exists. Excluding
+    the current bar is what makes this safe to compare bar i's own
+    high/low against without leaking bar i's own extreme into its own
+    reference level.
+    """
+    n = len(values_high)
+    highs = [None] * n
+    lows = [None] * n
+    for i in range(n):
+        if i >= lookback:
+            highs[i] = max(values_high[i - lookback:i])
+            lows[i] = min(values_low[i - lookback:i])
+    return highs, lows
 
 
 # ---------------------------------------------------------------------
@@ -921,12 +992,165 @@ def run_backtest_scalp(bars, symbol, params):
     )
 
 
+LIQSWEEP_DEFAULTS = dict(
+    sweep_lookback_4h=20,       # 4h liquidity pool = rolling N-bar high/low (~20 bars = ~3.3 days on 4h)
+    confirm_lookback_1h=20,     # 1h break-of-structure level = rolling N-bar high/low
+    confirm_window_1h=12,       # bars to wait for the 1h confirmation after a 4h sweep before giving up
+    stop_buffer_points=10.0,    # stop placed beyond the swept extreme, and how far behind trailing structure
+    account_size=2000.0,        # the CASH account this was designed for - separate from the Tradeify prop
+                                 # account and its $2,000 trailing drawdown limit, same number, different thing
+    risk_pct=0.01,              # 1% of account risked per trade (NOT the originally-proposed 20% - see docstring)
+    min_contracts=1, max_contracts=5,
+    commission_per_contract=1.0,
+    slippage_ticks=2,
+)
+
+LIQSWEEP_GRID = dict(
+    sweep_lookback_4h=[10, 20, 30],
+    confirm_lookback_1h=[10, 20, 30],
+    confirm_window_1h=[6, 12, 24],
+    stop_buffer_points=[5.0, 10.0, 20.0],
+    risk_pct=[0.01, 0.015, 0.02],
+)
+
+
+# ---------------------------------------------------------------------
+# Strategy 6: Liquidity sweep swing trade (multi-timeframe confluence)
+#
+# 4h structure (built by resampling 60-minute bars) for the setup, 1h for
+# the entry trigger. A "sweep" is a 4h bar whose high/low exceeds the
+# recent rolling extreme AND closes back inside it (rejection) - the
+# same rejection-then-breakout shape vwap_pullback uses, just applied to
+# a rolling price extreme instead of VWAP, and to 4h structure confirmed
+# on 1h instead of same-timeframe. No fixed take-profit: once filled, the
+# stop trails to newly-formed 1h structure in the trade's favor instead
+# of a price target. Position size is DERIVED from the stop distance to
+# target a fixed risk_pct of the account, clamped to 1-5 contracts - not
+# a fixed size like the other strategies here.
+# ---------------------------------------------------------------------
+def run_backtest_liquidity_sweep(bars_1h, symbol, params):
+    p = {**LIQSWEEP_DEFAULTS, **params}
+    bars_4h, end_indices_4h = resample_bars(bars_1h, 4)
+
+    highs_4h = [b["high"] for b in bars_4h]
+    lows_4h = [b["low"] for b in bars_4h]
+    closes_4h = [b["close"] for b in bars_4h]
+    roll_high_4h, roll_low_4h = rolling_high_low(highs_4h, lows_4h, p["sweep_lookback_4h"])
+
+    highs_1h = [b["high"] for b in bars_1h]
+    lows_1h = [b["low"] for b in bars_1h]
+    closes_1h = [b["close"] for b in bars_1h]
+    roll_high_1h, roll_low_1h = rolling_high_low(highs_1h, lows_1h, p["confirm_lookback_1h"])
+
+    # Which 1h bar index each 4h sweep signal FIRST becomes knowable at -
+    # the bar right after the 4h bar that produced it closes.
+    trigger_at_1h_idx = {}
+    for k, end_idx in enumerate(end_indices_4h):
+        if roll_high_4h[k] is None:
+            continue
+        if highs_4h[k] > roll_high_4h[k] and closes_4h[k] < roll_high_4h[k]:
+            trigger_at_1h_idx.setdefault(end_idx, []).append(("short", highs_4h[k]))
+        if lows_4h[k] < roll_low_4h[k] and closes_4h[k] > roll_low_4h[k]:
+            trigger_at_1h_idx.setdefault(end_idx, []).append(("long", lows_4h[k]))
+
+    point_value = POINT_VALUE[symbol]
+    slippage_price = TICK_SIZE[symbol] * p["slippage_ticks"]
+    risk_dollars = p["account_size"] * p["risk_pct"]
+
+    position = None
+    trade_cashflows = []
+
+    def close_position(direction, qty, price, avg_entry):
+        fill_price = price - slippage_price if direction == "long" else price + slippage_price
+        per_contract = (fill_price - avg_entry) if direction == "long" else (avg_entry - fill_price)
+        trade_cashflows.append(per_contract * point_value * qty - p["commission_per_contract"] * qty)
+
+    pending = {"direction": None, "sweep_extreme": None, "bars_left": 0}
+
+    for i in range(1, len(bars_1h)):
+        price = closes_1h[i]
+
+        if (i - 1) in trigger_at_1h_idx and pending["direction"] is None and position is None:
+            direction, extreme = trigger_at_1h_idx[i - 1][-1]
+            pending["direction"] = direction
+            pending["sweep_extreme"] = extreme
+            pending["bars_left"] = p["confirm_window_1h"]
+
+        if position is not None:
+            direction = position["direction"]
+            stop_hit = (direction == "long" and price <= position["stop"]) or \
+                       (direction == "short" and price >= position["stop"])
+            if stop_hit:
+                close_position(direction, position["size"], price, position["avg_entry"])
+                position = None
+                continue
+            if direction == "long" and roll_low_1h[i] is not None:
+                new_stop = roll_low_1h[i] - p["stop_buffer_points"]
+                if new_stop > position["stop"]:
+                    position["stop"] = new_stop
+            elif direction == "short" and roll_high_1h[i] is not None:
+                new_stop = roll_high_1h[i] + p["stop_buffer_points"]
+                if new_stop < position["stop"]:
+                    position["stop"] = new_stop
+            continue
+
+        if pending["direction"] == "long":
+            if roll_high_1h[i] is not None and closes_1h[i] > roll_high_1h[i]:
+                entry_price = price
+                stop_price = pending["sweep_extreme"] - p["stop_buffer_points"]
+                stop_distance = entry_price - stop_price
+                if stop_distance > 0:
+                    qty = max(p["min_contracts"], min(p["max_contracts"],
+                              int(risk_dollars / (stop_distance * point_value))))
+                    fill_price = entry_price + slippage_price
+                    position = dict(direction="long", size=qty, avg_entry=fill_price, stop=stop_price)
+                    trade_cashflows.append(-p["commission_per_contract"] * qty)
+                pending["direction"] = None
+            else:
+                pending["bars_left"] -= 1
+                if pending["bars_left"] <= 0:
+                    pending["direction"] = None
+        elif pending["direction"] == "short":
+            if roll_low_1h[i] is not None and closes_1h[i] < roll_low_1h[i]:
+                entry_price = price
+                stop_price = pending["sweep_extreme"] + p["stop_buffer_points"]
+                stop_distance = stop_price - entry_price
+                if stop_distance > 0:
+                    qty = max(p["min_contracts"], min(p["max_contracts"],
+                              int(risk_dollars / (stop_distance * point_value))))
+                    fill_price = entry_price - slippage_price
+                    position = dict(direction="short", size=qty, avg_entry=fill_price, stop=stop_price)
+                    trade_cashflows.append(-p["commission_per_contract"] * qty)
+                pending["direction"] = None
+            else:
+                pending["bars_left"] -= 1
+                if pending["bars_left"] <= 0:
+                    pending["direction"] = None
+
+    gross_profit = sum(c for c in trade_cashflows if c > 0)
+    gross_loss = -sum(c for c in trade_cashflows if c < 0)
+    net = sum(trade_cashflows)
+    if gross_loss > 0:
+        profit_factor = gross_profit / gross_loss
+    else:
+        profit_factor = float("inf") if gross_profit > 0 else 0.0
+
+    return dict(
+        events=len(trade_cashflows), net_pnl=net,
+        gross_profit=gross_profit, gross_loss=gross_loss,
+        profit_factor=profit_factor,
+        max_drawdown=_max_drawdown(trade_cashflows),
+    )
+
+
 STRATEGIES = {
     "crossover": dict(run=run_backtest_crossover, grid=CROSSOVER_GRID, group_by=("fast_len", "slow_len")),
     "orb": dict(run=run_backtest_orb, grid=ORB_GRID, group_by=("adx_threshold",)),
     "meanrev": dict(run=run_backtest_meanrev, grid=MEANREV_GRID, group_by=("use_trend_alignment", "use_obv_confirm")),
     "vwap_pullback": dict(run=run_backtest_vwap_pullback, grid=VWAPPB_GRID, group_by=("adx_low", "adx_high")),
     "scalp": dict(run=run_backtest_scalp, grid=SCALP_GRID, group_by=("target_points", "stop_points")),
+    "liquidity_sweep": dict(run=run_backtest_liquidity_sweep, grid=LIQSWEEP_GRID,
+                             group_by=("sweep_lookback_4h", "confirm_lookback_1h")),
 }
 
 
@@ -1029,17 +1253,38 @@ def run_for(symbol, interval, strategy_name):
         else:
             print("      -> Did NOT hold up out-of-sample. Treat the in-sample number as noise, not edge.")
 
-        base_size = best_params.get("base_size", SHARED_DEFAULTS["base_size"])
-        max_size = best_params.get("max_size", SHARED_DEFAULTS["max_size"])
-        if oos_stats["max_drawdown"] > DRAWDOWN_SAFETY_BUDGET:
-            sug_base, sug_max = suggest_size_for_budget(oos_stats["max_drawdown"], base_size, max_size)
+        # Strategies that size off their OWN account (e.g. liquidity_sweep's
+        # separate $2,000 CASH account, which has no external trailing-
+        # drawdown rule like the prop account does - just personal risk
+        # tolerance) get their own budget instead of the prop account's.
+        if "account_size" in best_params:
+            budget_limit = best_params["account_size"]
+            budget_safety = budget_limit * 0.15
+            budget_note = f"15% of the ${budget_limit:.0f} cash account (a default assumption, not an external rule - adjust to your own risk tolerance)"
+        else:
+            budget_limit = ACCOUNT_TRAILING_DRAWDOWN_LIMIT
+            budget_safety = DRAWDOWN_SAFETY_BUDGET
+            budget_note = f"real account trailing drawdown limit: ${budget_limit:.0f}"
+
+        if oos_stats["max_drawdown"] > budget_safety:
             print(f"      !! max_drawdown ${oos_stats['max_drawdown']:.2f} exceeds the "
-                  f"${DRAWDOWN_SAFETY_BUDGET:.0f} safety budget (real account trailing "
-                  f"drawdown limit: ${ACCOUNT_TRAILING_DRAWDOWN_LIMIT:.0f}).")
-            print(f"      -> Rough linear-scaling suggestion: base_size={sug_base}, "
-                  f"max_size={sug_max} (was {base_size}/{max_size}). RE-RUN at this size to "
-                  f"confirm, don't just trust the scaling math - stop-loss noise doesn't scale"
-                  f" perfectly linearly in practice.")
+                  f"${budget_safety:.0f} safety budget ({budget_note}).")
+            if "base_size" in best_params and "max_size" in best_params:
+                sug_base, sug_max = suggest_size_for_budget(
+                    oos_stats["max_drawdown"], best_params["base_size"], best_params["max_size"])
+                print(f"      -> Rough linear-scaling suggestion: base_size={sug_base}, "
+                      f"max_size={sug_max} (was {best_params['base_size']}/{best_params['max_size']}). "
+                      f"RE-RUN at this size to confirm, don't just trust the scaling math - "
+                      f"stop-loss noise doesn't scale perfectly linearly in practice.")
+            elif "size" in best_params:
+                sug_size = max(1, round(best_params["size"] * budget_safety / oos_stats["max_drawdown"]))
+                print(f"      -> Rough linear-scaling suggestion: size={sug_size} "
+                      f"(was {best_params['size']}). RE-RUN at this size to confirm.")
+            elif "risk_pct" in best_params:
+                sug_risk_pct = best_params["risk_pct"] * budget_safety / oos_stats["max_drawdown"]
+                print(f"      -> This strategy sizes FROM risk_pct already (not a fixed "
+                      f"contract count) - try risk_pct={sug_risk_pct:.4f} (was "
+                      f"{best_params['risk_pct']}) and re-run to confirm.")
 
 
 def main():
@@ -1058,11 +1303,17 @@ def main():
     for interval in ["5m", "15m"]:
         run_for("MNQ=F", interval, "vwap_pullback")
 
-    # scalp: first-draft fixed-point-target strategy, not yet tested at
-    # all. Running 1m and 5m to see if either produces a real signal
-    # before ever considering a Pine version.
-    for interval in ["1m", "5m"]:
-        run_for("MNQ=F", interval, "scalp")
+    # scalp: real TradingView result on this script's own top candidate
+    # came back PF 1.067 / win rate barely above the mathematical
+    # breakeven for its own risk:reward - DEAD, no real edge. Not
+    # re-running it here anymore; see docstring above for the full result.
+
+    # liquidity_sweep: brand new, multi-timeframe (4h structure / 1h
+    # trigger) swing-trade candidate for the separate $2,000 cash
+    # account, built from 60-minute data (Yahoo allows ~2 years of it,
+    # vastly more than the 60-day cap on 5m/15m). Completely untested -
+    # this is the first walk-forward pass.
+    run_for("MNQ=F", "60m", "liquidity_sweep")
 
 
 if __name__ == "__main__":

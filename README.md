@@ -144,37 +144,80 @@ What it does:
    trust** — if profit factor holds above 1.0 there, it's a real signal;
    if it collapses, the in-sample result was noise.
 
-It supports five strategy families (`crossover`, `orb`, `meanrev`,
-`vwap_pullback`, `scalp` — see `STRATEGIES` dict in the script). `main()`
-currently runs, MNQ only (MES dropped):
+It supports six strategy families (`crossover`, `orb`, `meanrev`,
+`vwap_pullback`, `scalp`, `liquidity_sweep` — see `STRATEGIES` dict in
+the script). `main()` currently runs, MNQ only (MES dropped):
 - `vwap_pullback` on 5m/15m — re-running with a widened `stop_atr_mult`
   grid (down to 0.5x ATR) to find a config that holds the real 5-minute
   edge (PF 1.527 confirmed on TradingView) within the account's real
   $2,000 drawdown budget, since the tested 3/3/9-contract config drew
   down $3,570 — see Pine Script section above and "Position sizing"
   below.
-- `scalp` on 1m/5m — a new, **untested** fixed-point-target strategy
-  (10-15 point target, tight stop, auto-close, no scale-in/out) for a
-  quick-in-quick-out approach, as opposed to the managed multi-bar
-  positions the other three strategies hold. Entry: a fresh VWAP cross
-  confirmed by fast EMA momentum + a volume spike. Small targets mean
-  commission+slippage eat a real percentage of the target, so treat any
-  promising-looking PF here with extra skepticism until the events count
-  and net PnL are checked, not just the ratio.
+- `liquidity_sweep` on 60m — see "New: liquidity-sweep swing trade
+  research" below.
 
-`meanrev`'s best result (MNQ 5m) already has real TradingView
-confirmation — see the Pine Script section above — but **its max
-drawdown against the real $2,000 limit has never been checked**, unlike
-`vwap_pullback` (see "Position sizing" below) — this is an open item.
+`scalp` is no longer run by `main()` — its real TradingView result (PF
+1.067, win rate barely above the mathematical breakeven for its own
+risk:reward) confirmed it has no real edge. `meanrev`'s best result (MNQ
+5m) already has real TradingView confirmation — see the Pine Script
+section above — but its most recent real test raised a serious open
+question about whether that edge is repeatable (see "Open items").
 `crossover` and `orb` are kept only for reference; both have already
 been tested and shown to lack real out-of-sample edge.
 
-### Position sizing: size from the drawdown budget, not from margin capacity
+### New: liquidity-sweep swing trade research (separate $2,000 cash account)
 
-The account allows up to 40 MNQ contracts on margin, but that number is
-irrelevant to position sizing here — the account's real constraint is a
-**$2,000 EOD trailing drawdown limit** (confirmed), which is a much
-tighter ceiling. `_max_drawdown()` in `backtest_optimizer.py` now tracks
+A different idea from everything above: swing-trade MNQ on a **separate
+$2,000 cash account** (not the Tradeify prop account — same dollar
+figure, unrelated accounts, don't confuse the two) using multi-timeframe
+confluence — 4-hour structure for the setup, 1-hour for the entry
+trigger — targeting liquidity sweeps (price briefly breaking a recent
+high/low then rejecting back inside it) rather than multiple trades per
+day. This is a recognized methodology (often called ICT / Smart Money
+Concepts) with real backtested track records when the entry/exit rules
+are fully objective — published rule-based backtests report 50-65% win
+rates with profit factor above 1.5, well short of the 70-80% win rates
+often claimed in ICT marketing content, which tend to come from
+discretionary/cherry-picked examples rather than a codified system.
+
+`run_backtest_liquidity_sweep()` in `backtest_optimizer.py` codifies it:
+a "sweep" is a 4-hour bar (built by resampling 60-minute bars — Yahoo
+has no native 4h interval) whose high/low exceeds a rolling N-bar extreme
+and closes back inside it (the same rejection-then-breakout shape
+`vwap_pullback` uses, applied to a rolling price extreme instead of
+VWAP). Entry triggers on a 1-hour close beyond its own rolling extreme in
+the reversal direction. No fixed take-profit — the stop trails to newly
+formed 1-hour structure in the trade's favor instead, per the "let it
+run" idea behind the original request.
+
+**Position sizing was changed from the original proposal.** The
+originally-described 20% stop-loss per trade ($400 on a $2,000 account)
+would risk account ruin in roughly 5 losing trades — nowhere close to
+safe even at a genuine 50-65% win rate. Position size (1-5 contracts, per
+the original "1 to 5 micros" idea) is instead *derived* from the stop
+distance to target a fixed `risk_pct` of the account per trade, defaulting
+to **1% ($20/trade)** and grid-searched up to 2%. This keeps the "size
+varies with setup" idea while keeping the risked fraction sane.
+
+One practical bonus: this uses 60-minute data, which Yahoo allows up to
+**~2 years back** — vastly more than the 60-day cap on 5m/15m data that's
+limited every other result in this README to one test window. See
+"Getting a longer backtest window" below for why that cap exists.
+
+**Status: completely untested.** The entry/exit logic has been verified
+correct via an engineered test scenario (a hand-built sweep + rejection +
+breakout fires a trade as expected — same verification standard every
+other strategy here went through before being trusted), but it has never
+been run against real data. Run `python backtest_optimizer.py` (or
+`research_runner.py` to log it) next.
+
+### Position sizing (Tradeify prop account): size from the drawdown budget, not from margin capacity
+
+The Tradeify account allows up to 40 MNQ contracts on margin, but that
+number is irrelevant to position sizing here — the account's real
+constraint is a **$2,000 EOD trailing drawdown limit** (confirmed), which
+is a much tighter ceiling. `_max_drawdown()` in `backtest_optimizer.py`
+now tracks
 peak-to-trough drawdown on the closed-trade equity curve for every
 strategy, and the report flags any candidate whose out-of-sample max
 drawdown exceeds `DRAWDOWN_SAFETY_BUDGET` ($1,300 — a buffer below the
@@ -359,24 +402,42 @@ test_connection.py            # Tradovate direct-API test - only relevant
 - **`vwap_pullback` MNQ 5-minute needs a sizing fix before it's tradeable**
   — real TradingView result was PF 1.527 / 52 trades / $4,928 net (real
   signal) but $3,570 max drawdown against the confirmed $2,000 account
-  limit at 3/3/9 contract sizing. Run the updated `backtest_optimizer.py`
-  (widened `stop_atr_mult` grid, drawdown-aware size suggestion in the
-  report) locally, then confirm whichever config it suggests in
-  TradingView before trusting it. 15-minute has no real edge (PF ~1.05)
-  and is disabled by default via the Pine script's timeframe gate.
-- **`meanrev`'s max drawdown has never been checked against the real
-  $2,000 limit** — it was confirmed on profit factor alone (PF
-  1.185–1.403) before the account's real drawdown limit was known. Run
-  it through the updated optimizer (now tracks `max_drawdown` for every
-  strategy) and check the same way `vwap_pullback` was checked, since
-  it's the currently "active" script in the setup steps above.
-- **`scalp` strategy Pine Script is written but not TradingView-tested** —
-  `jarvis_scalp_vwap_cross_mnq.pine` ports the MNQ 5m walk-forward result
-  (target 12pts/stop 6pts/EMA 9/vol 1.2x, OOS PF 1.449/48 trades/$849 max
-  drawdown) to Pine. This is the next thing to run through TradingView's
-  Strategy Tester — same confirm/refute process as always. 1-minute scalp
-  data was too thin to evaluate at all (2 out-of-sample trades, Yahoo's
-  7-day cap on 1m bars) and isn't a candidate right now.
+  limit at 3/3/9 contract sizing. Tightening the stop to fix this was
+  tried and **failed** (0.5x ATR broke the edge, OOS PF 0.000) — the fix
+  is reduced size (roughly 1 base/3-4 max contracts) at the original 1.5x
+  ATR stop, not yet re-confirmed in TradingView at that size. 15-minute
+  has no real edge (PF ~1.05) and is disabled by default via the Pine
+  script's timeframe gate.
+- **`meanrev` (the currently "active" script) has a serious, unresolved
+  question about whether its edge is real.** Real TradingView test:
+  $6,801.50 max drawdown — over 3x the confirmed $2,000 account limit,
+  worse than `vwap_pullback`'s problem — at default 3/3/9 sizing. Worse
+  than the drawdown number itself: nearly all of that test's $17,476.50
+  net profit came from a single ~5-day window in early August; the six-plus
+  weeks before that were flat-to-losing, and the long/short split was
+  heavily skewed (Long PF 4.628 vs. Short PF 1.059, barely above
+  breakeven). This may mean the well-established "PF 1.185–1.403" result
+  this strategy was originally confirmed on was never checked for the
+  same kind of concentration, since drawdown/equity-curve shape weren't
+  being tracked at the time. Next step (date range is locked in the
+  TradingView account being used, so this couldn't be tested directly):
+  open the trade list for the existing backtest and check what happened
+  Aug 3–7 — one real trend move (informative, not necessarily
+  disqualifying) vs. several independent legitimate setups (a better
+  sign) — without needing to re-run anything.
+- **`scalp` is confirmed dead** — real TradingView result: PF 1.067, win
+  rate 34.69% (barely above the mathematical breakeven of 33.3% for its
+  own 2:1 target:stop), and the equity curve gave back over 80% of its
+  peak by the end of the test. Same failure pattern as MES
+  mean-reversion: this script's own search overstated a real signal that
+  didn't hold up on real fills. `jarvis_scalp_vwap_cross_mnq.pine` stays
+  in the repo for reference but should not be pursued further as
+  configured.
+- **`liquidity_sweep` needs its first walk-forward run** — brand new
+  strategy (see "New: liquidity-sweep swing trade research" above),
+  logic-verified via an engineered test scenario but never run against
+  real data. Run `python backtest_optimizer.py` or `research_runner.py`
+  next.
 - **Every result in this repo is from a single ~10-week backtest window**
   — see "Getting a longer backtest window" above for real options (none
   of them free AND unlimited). Treat every "held up out-of-sample"
