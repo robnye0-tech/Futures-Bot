@@ -93,30 +93,68 @@ As a result, this repo now has two parts:
   backtest window" below) — a hold-up on one window is promising, not
   proof.
 
-## Active setup: Pine Script + TradingView + PickMyTrade
+## Active setup: signal-only, manual trading (current plan)
+
+After the automated-execution path below was fully built out (PickMyTrade
+webhook wiring, daily kill switch, position sizing), the decision was
+made to **not** auto-execute trades — too much of this project's own
+findings (drawdown blowing past account limits, outlier-dependent
+"edges," sizing bugs) came from testing that logic, and a human staying
+in the loop for every entry is a simpler, safer way to actually trade
+this. The active plan now is a **signal-only indicator**, not a
+strategy that places orders:
 
 1. Open TradingView, load an **MNQ1!** continuous futures chart on a
-   **5-minute timeframe** (the only setup with real, confirmed edge as of
-   now — MES on the same setup did not hold up, see above).
-2. Open Pine Editor, paste in `pinescript/jarvis_meanrev_vwap_scaler.pine`,
-   and add it to the chart as a strategy.
-3. Adjust the inputs in the strategy settings if needed (they mirror the
-   constants that were in `config.py`) — position sizing, ATR multiples,
-   session hours, and the daily kill switch dollar amount. **Confirm the
-   real Tradeify max trailing drawdown figure and set the kill switch
-   comfortably below it before going live.**
-4. Sign up for [PickMyTrade](https://pickmytrade.trade/) and connect your
-   Tradeify/Tradovate account through their dashboard.
-5. In PickMyTrade's dashboard, generate the webhook URL and JSON alert
+   **5-minute timeframe** (the only timeframe with a real, confirmed
+   `vwap_pullback` edge as of now).
+2. Open Pine Editor, paste in
+   `pinescript/jarvis_vwap_pullback_signals_mnq.pine`, and add it to the
+   chart as an **indicator** (not a strategy — this one has no
+   `strategy()` declaration, no simulated position, nothing to wire to a
+   broker).
+3. It plots LONG/SHORT triangle markers with a reference Stop/Target1/
+   Target2 label at each signal — those levels are informational (same
+   ATR multiples the backtested version uses), not orders. You decide
+   position size, whether to take the signal, and how to manage the
+   trade from there.
+4. Right-click the chart → **Add Alert** → Condition → this indicator →
+   pick "VWAP Pullback Long" or "VWAP Pullback Short" → set to "Once Per
+   Bar Close" (not intrabar) → choose however you want to be notified
+   (popup, sound, mobile push, email). No PickMyTrade, no webhook, no
+   broker connection needed for this path.
+5. **Before trusting any signal**, note the open caveats: the strategy
+   version's real TradingView result was PF 1.527 / 52 trades / $4,928
+   net with a $3,570 max drawdown against the account's $2,000 limit at
+   3/3/9 sizing — reduced-size re-confirmation is still pending (see
+   "Open items"). It also hasn't been checked for the same "Outliers
+   PnL" concentration problem that showed up on the mean-reversion
+   script (profit dominated by a handful of oversized trades, sub-50%
+   win rate) — worth checking before trading these signals live.
+
+### Alternative: full auto-execution (built, not currently in use)
+
+The original plan wired a `strategy()` script's order-fill alerts to
+[PickMyTrade](https://pickmytrade.trade/) to auto-execute on Tradeify.
+That path still exists and works the same way for any of the `strategy()`
+Pine Scripts in this repo (e.g. `jarvis_meanrev_vwap_scaler.pine`,
+`jarvis_vwap_pullback_mnq.pine`) if the plan changes back to automation
+later:
+
+1. Load the strategy script on the chart, adjust inputs if needed
+   (position sizing, ATR multiples, session hours, daily kill switch —
+   **confirm the real Tradeify max trailing drawdown figure and set the
+   kill switch comfortably below it**).
+2. Sign up for PickMyTrade and connect your Tradeify/Tradovate account
+   through their dashboard.
+3. In PickMyTrade's dashboard, generate the webhook URL and JSON alert
    template for your account (**do not hand-write this JSON yourself** —
    use their generator, it embeds your account token correctly).
-6. In TradingView, create an alert on the strategy (condition: "Order
+4. In TradingView, create an alert on the strategy (condition: "Order
    fills" or "Any alert() function call", whichever PickMyTrade's current
-   docs specify), paste in the webhook URL and the generated JSON template
-   from step 5.
-7. **Test in TradingView's Bar Replay / paper mode and against PickMyTrade's
-   test/demo routing first.** Do not point a freshly-wired alert straight at
-   a funded account.
+   docs specify), paste in the webhook URL and generated JSON template.
+5. **Test in TradingView's Bar Replay / paper mode and against
+   PickMyTrade's test/demo routing first.** Do not point a freshly-wired
+   alert straight at a funded account.
 
 ## Parameter tuning: use the optimizer, don't hand-tweak in TradingView
 
@@ -388,9 +426,10 @@ the same window is how you accidentally curve-fit without meaning to.
 
 ```
 pinescript/
-  jarvis_meanrev_vwap_scaler.pine   # ACTIVE strategy - runs on TradingView
-  jarvis_vwap_pullback_mnq.pine     # MNQ only - real edge on 5m, sizing not yet solved
-  jarvis_scalp_vwap_cross_mnq.pine  # newest candidate, MNQ only - not yet validated
+  jarvis_vwap_pullback_signals_mnq.pine  # ACTIVE - signal-only indicator, manual trading
+  jarvis_vwap_pullback_mnq.pine     # same logic as a strategy() - auto-exec alternative, sizing not yet solved
+  jarvis_meanrev_vwap_scaler.pine   # real edge but outlier-dependent (see Open items) - not currently used
+  jarvis_scalp_vwap_cross_mnq.pine  # confirmed dead - reference only
   jarvis_orb_vwap_scaler.pine       # ORB - reference only, no edge found
   jarvis_mnq_mes_scaler.pine        # EMA crossover - reference only, no edge found
 
@@ -424,23 +463,22 @@ test_connection.py            # Tradovate direct-API test - only relevant
   ATR stop, not yet re-confirmed in TradingView at that size. 15-minute
   has no real edge (PF ~1.05) and is disabled by default via the Pine
   script's timeframe gate.
-- **`meanrev` (the currently "active" script) has a serious, unresolved
-  question about whether its edge is real.** Real TradingView test:
-  $6,801.50 max drawdown — over 3x the confirmed $2,000 account limit,
-  worse than `vwap_pullback`'s problem — at default 3/3/9 sizing. Worse
-  than the drawdown number itself: nearly all of that test's $17,476.50
-  net profit came from a single ~5-day window in early August; the six-plus
-  weeks before that were flat-to-losing, and the long/short split was
-  heavily skewed (Long PF 4.628 vs. Short PF 1.059, barely above
-  breakeven). This may mean the well-established "PF 1.185–1.403" result
-  this strategy was originally confirmed on was never checked for the
-  same kind of concentration, since drawdown/equity-curve shape weren't
-  being tracked at the time. Next step (date range is locked in the
-  TradingView account being used, so this couldn't be tested directly):
-  open the trade list for the existing backtest and check what happened
-  Aug 3–7 — one real trend move (informative, not necessarily
-  disqualifying) vs. several independent legitimate setups (a better
-  sign) — without needing to re-run anything.
+- **`meanrev` is answered, and not favorably: its "edge" is outlier-
+  dependent, not real in the repeatable sense.** Real TradingView test
+  (Jun 28–Aug 20 window): Total PnL $15,538.50, but **Outliers PnL was
+  $17,893.50 — more than the entire net profit.** Strip the outlier
+  trades out and this strategy nets to roughly **-$2,355**. Win rate was
+  48.15% (26/54), below 50%. Max drawdown $6,801.50, over 3x the
+  confirmed $2,000 account limit. This is the same
+  data/window-overlap issue as before (max drawdown, largest win/loss
+  all identical to the prior test — not independent confirmation, same
+  underlying Aug 3–7 trade cluster), but the Outliers PnL metric itself
+  is decisive on its own: this is not a strategy with a real edge on
+  typical trades, it's a sub-50%-win-rate strategy rescued by a handful
+  of oversized trades. Not currently in use — `vwap_pullback` (as a
+  signal-only indicator, see "Active setup") is the current plan
+  instead. **`vwap_pullback` itself has never been checked for this
+  same outlier-dependency problem** — do that before trusting it either.
 - **`scalp` is confirmed dead** — real TradingView result: PF 1.067, win
   rate 34.69% (barely above the mathematical breakeven of 33.3% for its
   own 2:1 target:stop), and the equity curve gave back over 80% of its
