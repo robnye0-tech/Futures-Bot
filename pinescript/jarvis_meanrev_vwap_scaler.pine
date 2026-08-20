@@ -1,14 +1,19 @@
 // @version=6
-// Jarvis VWAP Mean-Reversion Scale-In-Out Strategy — MNQ / MES
+// Jarvis VWAP Mean-Reversion Scale-In-Out Strategy — MNQ ONLY
 //
 // Fades price back toward VWAP when stretched beyond a volatility-based
 // band, but only when ADX confirms range-bound conditions (the INVERSE
-// filter from the ORB script, which wanted trending conditions). Walk-
-// forward tested via backtest_optimizer.py - the standout result was
-// MES on a 5-minute chart, consistent across multiple band widths with
-// real sample sizes (not a small-sample fluke like the earlier ORB
-// 1-minute lead, which failed to hold up under a larger sample). Best
-// tested on a 5-minute MNQ/MES chart to start - see repo README.
+// filter from the ORB script, which wanted trending conditions).
+//
+// CORRECTED (this comment was stale for a while - the logic below never
+// changed, only this description): the walk-forward search in
+// backtest_optimizer.py originally flagged MES 5m as the standout
+// candidate, but that did NOT hold up on real TradingView data (PF
+// 0.6-0.8) - a case of the Python approximation overstating a signal
+// that didn't survive real fills. MNQ 5m is the one with REAL
+// TradingView confirmation instead: profit factor 1.185-1.403 depending
+// on VWAP band width, ~100+ trades, commission/slippage included. Run
+// this on MNQ1!, not MES1! - see repo README for the full history.
 //
 // Also includes toggleable trend-alignment (EMA-based) and OBV
 // volume-trend confirmation filters, both OFF by default. They were
@@ -24,15 +29,16 @@
 // into the strategy() declaration below, so they apply automatically -
 // no need to re-enter them in Properties every time the script reloads.
 //
-// This strategy is meant to be run on a TradingView chart (load MNQ1! or
-// MES1! continuous futures), with its order-fill alerts wired to
-// PickMyTrade (or a similar bridge) to execute on your Tradeify account.
+// This strategy is meant to be run on a TradingView chart (load MNQ1!
+// continuous futures — not MES1!, see the correction above), with its
+// order-fill alerts wired to PickMyTrade (or a similar bridge) to
+// execute on your Tradeify account.
 //
 // Do NOT hand-write the webhook JSON yourself — use PickMyTrade's own
 // alert JSON generator in their dashboard and paste that into the
 // TradingView alert message box. See README for the full setup steps.
 
-strategy("Jarvis VWAP Mean-Reversion Scaler - MNQ/MES",
+strategy("Jarvis VWAP Mean-Reversion Scaler - MNQ",
      overlay = true,
      default_qty_type = strategy.fixed,
      default_qty_value = 3,
