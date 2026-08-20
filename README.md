@@ -204,12 +204,25 @@ One practical bonus: this uses 60-minute data, which Yahoo allows up to
 limited every other result in this README to one test window. See
 "Getting a longer backtest window" below for why that cap exists.
 
-**Status: completely untested.** The entry/exit logic has been verified
-correct via an engineered test scenario (a hand-built sweep + rejection +
-breakout fires a trade as expected — same verification standard every
-other strategy here went through before being trusted), but it has never
-been run against real data. Run `python backtest_optimizer.py` (or
-`research_runner.py` to log it) next.
+**Status: first real run found a real sizing bug, now fixed, needs a
+re-run.** The entry/exit logic was verified correct via an engineered
+test scenario before the first run (same standard every other strategy
+here went through), but that first run against real 60-minute MNQ data
+(2024-03-28 to 2026-08-20) surfaced something the engineered test
+couldn't catch: max drawdown came back near/over the *entire* $2,000
+account (e.g. $2,288) even at the default `risk_pct=0.01` ($20/trade
+target). Cause: position size was floored to a minimum of 1 contract
+even when the stop was too wide for 1 contract to fit the risk budget —
+silently risking far more than intended on exactly the widest-stop
+trades. **Fixed**: a trade is now skipped entirely, rather than forced
+to 1 contract, whenever the stop is too wide for the risk budget —
+standard risk-based sizing practice. A separate reporting bug (this
+strategy's drawdown check was printing the *Tradeify prop account's*
+$2,000/$1,300 numbers instead of its own $2,000 cash account's) is also
+fixed. **Every result from before this fix should be treated as
+invalid** — the sizing itself was wrong, not just the parameters. Run
+`python backtest_optimizer.py` (or `research_runner.py` to log it)
+again to get a real first read.
 
 ### Position sizing (Tradeify prop account): size from the drawdown budget, not from margin capacity
 
@@ -433,11 +446,13 @@ test_connection.py            # Tradovate direct-API test - only relevant
   didn't hold up on real fills. `jarvis_scalp_vwap_cross_mnq.pine` stays
   in the repo for reference but should not be pursued further as
   configured.
-- **`liquidity_sweep` needs its first walk-forward run** — brand new
-  strategy (see "New: liquidity-sweep swing trade research" above),
-  logic-verified via an engineered test scenario but never run against
-  real data. Run `python backtest_optimizer.py` or `research_runner.py`
-  next.
+- **`liquidity_sweep` needs a re-run after a real sizing bug fix** — see
+  "New: liquidity-sweep swing trade research" above. First real run
+  produced max drawdowns near/over the entire $2,000 account even at 1%
+  target risk per trade, caused by flooring position size to 1 contract
+  on stops too wide for that risk budget. Fixed (skip the trade instead
+  of forcing 1 contract) — every result from before the fix is invalid,
+  run it again.
 - **Every result in this repo is from a single ~10-week backtest window**
   — see "Getting a longer backtest window" above for real options (none
   of them free AND unlimited). Treat every "held up out-of-sample"

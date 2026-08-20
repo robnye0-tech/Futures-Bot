@@ -72,8 +72,20 @@ strategy. Supports four entry-signal families:
     in ~5 losing trades even at a real-world win rate. Uses 60-minute
     data, which Yahoo allows up to ~2 years back - a much longer real
     backtest window than any 5m/15m strategy here has ever gotten.
-    Brand new, completely untested - first walk-forward pass needed
-    before this is anything but a hypothesis.
+    FIRST REAL RUN found a genuine sizing bug, not just a weak result:
+    max drawdown came back near/over the entire $2,000 account (e.g.
+    $2,288) even at risk_pct=0.01 ($20/trade target) - caused by flooring
+    position size to a minimum of 1 contract even when the stop was too
+    wide for 1 contract to fit the risk budget, silently risking far more
+    than intended on exactly the widest-stop trades. FIXED: a trade is
+    now SKIPPED (not floored to 1 contract) whenever the stop is too wide
+    for even 1 contract to fit risk_pct - standard risk-based position
+    sizing practice (skip setups your account can't size properly for,
+    don't force them). Also fixed the report's drawdown-budget check,
+    which was printing the Tradeify prop account's $2,000/$1,300 numbers
+    for this strategy's separate cash account (account_size wasn't
+    reaching best_params before). Needs a fresh run post-fix before any
+    result here means anything - this is still a hypothesis.
 
 MES was tested on both meanrev and vwap_pullback and dropped entirely
 per user direction - real TradingView results never held up on MES the
@@ -1011,6 +1023,11 @@ LIQSWEEP_GRID = dict(
     confirm_window_1h=[6, 12, 24],
     stop_buffer_points=[5.0, 10.0, 20.0],
     risk_pct=[0.01, 0.015, 0.02],
+    # Singleton (not actually swept) - exists only so account_size shows up
+    # in best_params/grid results, which is what lets run_for()'s report
+    # recognize this strategy sizes off its OWN account instead of falling
+    # through to the (wrong, prop-account) drawdown budget message.
+    account_size=[LIQSWEEP_DEFAULTS["account_size"]],
 )
 
 
@@ -1100,11 +1117,17 @@ def run_backtest_liquidity_sweep(bars_1h, symbol, params):
                 stop_price = pending["sweep_extreme"] - p["stop_buffer_points"]
                 stop_distance = entry_price - stop_price
                 if stop_distance > 0:
-                    qty = max(p["min_contracts"], min(p["max_contracts"],
-                              int(risk_dollars / (stop_distance * point_value))))
-                    fill_price = entry_price + slippage_price
-                    position = dict(direction="long", size=qty, avg_entry=fill_price, stop=stop_price)
-                    trade_cashflows.append(-p["commission_per_contract"] * qty)
+                    raw_contracts = risk_dollars / (stop_distance * point_value)
+                    # Skip the trade (don't force a floor of min_contracts)
+                    # when the stop is too wide for even 1 contract to fit
+                    # the risk budget - forcing a minimum position here is
+                    # exactly what silently risks far more than risk_pct
+                    # intends on the widest, least-certain stops.
+                    if raw_contracts >= p["min_contracts"]:
+                        qty = min(p["max_contracts"], int(raw_contracts))
+                        fill_price = entry_price + slippage_price
+                        position = dict(direction="long", size=qty, avg_entry=fill_price, stop=stop_price)
+                        trade_cashflows.append(-p["commission_per_contract"] * qty)
                 pending["direction"] = None
             else:
                 pending["bars_left"] -= 1
@@ -1116,11 +1139,12 @@ def run_backtest_liquidity_sweep(bars_1h, symbol, params):
                 stop_price = pending["sweep_extreme"] + p["stop_buffer_points"]
                 stop_distance = stop_price - entry_price
                 if stop_distance > 0:
-                    qty = max(p["min_contracts"], min(p["max_contracts"],
-                              int(risk_dollars / (stop_distance * point_value))))
-                    fill_price = entry_price - slippage_price
-                    position = dict(direction="short", size=qty, avg_entry=fill_price, stop=stop_price)
-                    trade_cashflows.append(-p["commission_per_contract"] * qty)
+                    raw_contracts = risk_dollars / (stop_distance * point_value)
+                    if raw_contracts >= p["min_contracts"]:
+                        qty = min(p["max_contracts"], int(raw_contracts))
+                        fill_price = entry_price - slippage_price
+                        position = dict(direction="short", size=qty, avg_entry=fill_price, stop=stop_price)
+                        trade_cashflows.append(-p["commission_per_contract"] * qty)
                 pending["direction"] = None
             else:
                 pending["bars_left"] -= 1
