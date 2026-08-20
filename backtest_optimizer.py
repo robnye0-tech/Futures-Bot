@@ -43,15 +43,18 @@ strategy. Supports four entry-signal families:
     size suggestion printed in the report.
   - "scalp": fixed point target/stop, no scale-in/out, auto-close -
     entry on a fresh VWAP cross confirmed by fast EMA momentum and a
-    volume spike. MNQ only. This script's own search (MNQ 5m,
-    target=12pts/stop=4-6pts/EMA 9/vol 1.2x) showed OOS PF 1.449, 48
-    trades, $849 max drawdown - looked real. Real TradingView result on
-    the same config: PF 1.067, win rate 34.69% (barely above the
-    mathematical breakeven of 33.3% for its own 2:1 reward:risk), equity
-    curve gave back 80%+ of its peak by the end of the test - NO REAL
-    EDGE. Same failure pattern as MES mean-reversion: this script's
-    approximation overstated it, real fills didn't back it up. DEAD -
-    don't pursue this exact config further.
+    volume spike. MNQ only.
+    FIRST VERSION (target 8-15pts, noise-scale on MNQ): this script's own
+    search showed OOS PF 1.449, 48 trades - looked real. Real TradingView
+    result on the same config: PF 1.067, win rate 34.69% (barely above
+    the mathematical breakeven of 33.3% for its own 2:1 reward:risk),
+    equity curve gave back 80%+ of its peak - NO REAL EDGE, same failure
+    pattern as MES mean-reversion (approximation overstated a signal real
+    fills didn't back up). DEAD, don't pursue that exact config further.
+    SECOND VERSION (this build, target 20-40pts, a real momentum-scale
+    move instead of a noise-scale one) - same entry trigger, wider grid,
+    NOT YET TESTED. Whether a bigger target changes the outcome is an
+    open question, not an assumption either way.
   - "liquidity_sweep": swing-trade, multi-timeframe confluence - 4-hour
     structure (liquidity pools = rolling N-bar high/low, built by
     resampling 60-minute bars since Yahoo has no native 4h interval) for
@@ -896,16 +899,23 @@ def run_backtest_vwap_pullback(bars, symbol, params):
 
 SCALP_DEFAULTS = dict(
     ema_len=9, vol_len=20, vol_mult=1.5,
-    target_points=12.0, stop_points=6.0,
+    target_points=30.0, stop_points=12.0,
     size=2,
     session_start=(9, 30), session_end=(16, 0),
     commission_per_contract=1.0,
     slippage_ticks=2,
 )
 
+# Widened from the original 8-15pt target range (CONFIRMED DEAD on real
+# TradingView data - PF 1.067, win rate 34.69%, barely above the 33.3%
+# mathematical breakeven for its own 2:1 target:stop - see docstring
+# above) to 20-40pt per a request for a "quick move" scalp with a real
+# momentum-scale target instead of a noise-scale one. Same entry trigger
+# (fresh VWAP cross + EMA momentum + volume spike) - this tests whether
+# THAT signal works better at a bigger target, not a different signal.
 SCALP_GRID = dict(
-    target_points=[8.0, 10.0, 12.0, 15.0],
-    stop_points=[4.0, 5.0, 6.0, 8.0],
+    target_points=[20.0, 25.0, 30.0, 35.0, 40.0],
+    stop_points=[8.0, 10.0, 12.0, 15.0, 20.0],
     ema_len=[5, 9, 13],
     vol_mult=[1.2, 1.5, 2.0],
 )
@@ -1363,9 +1373,12 @@ def main():
     for interval in ["5m", "15m"]:
         run_for("MNQ=F", interval, "vwap_pullback")
 
-    # scalp: real TradingView result (PF 1.067, win rate barely above the
-    # mathematical breakeven for its own risk:reward) - DEAD, no real
-    # edge. Not re-running it here; see docstring above for the full result.
+    # scalp: the original 8-15pt-target version is DEAD (real TradingView
+    # result PF 1.067, win rate barely above the mathematical breakeven
+    # for its own risk:reward) - see docstring above. Re-testing now with
+    # a widened 20-40pt target grid ("quick move" scale instead of
+    # noise-scale) - same entry trigger, first pass at this range.
+    run_for("MNQ=F", "5m", "scalp")
 
     # liquidity_sweep: real data (after fixing two sizing bugs - see
     # docstring above) came back a consistent net LOSER in-sample and
