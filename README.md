@@ -220,9 +220,20 @@ standard risk-based sizing practice. A separate reporting bug (this
 strategy's drawdown check was printing the *Tradeify prop account's*
 $2,000/$1,300 numbers instead of its own $2,000 cash account's) is also
 fixed. **Every result from before this fix should be treated as
-invalid** — the sizing itself was wrong, not just the parameters. Run
-`python backtest_optimizer.py` (or `research_runner.py` to log it)
-again to get a real first read.
+invalid** — the sizing itself was wrong, not just the parameters.
+
+The re-run after that fix came back empty ("no candidate had enough
+trades") — not a bug, the fix correctly skipping nearly every signal:
+MNQ's typical 4h/1h swing stop distance is wider than a 1-2% ($20-40)
+risk budget affords for even 1 contract. `risk_pct` is now grid-searched
+up to 5% (still far below the originally-proposed 20%) to find where
+this becomes tradeable, and the report now shows `signals_total` /
+`signals_skipped_undersized` / `avg_skipped_stop_distance` diagnostics
+even on an empty result, so it's visible *why* rather than just "no
+data." Run `python backtest_optimizer.py` (or `research_runner.py` to
+log it) again — if even 5% produces nothing, that's a real finding about
+whether this instrument/timeframe fits a $2,000 account at all, not
+something to keep raising the risk fraction to fix.
 
 ### Position sizing (Tradeify prop account): size from the drawdown budget, not from margin capacity
 

@@ -1022,7 +1022,15 @@ LIQSWEEP_GRID = dict(
     confirm_lookback_1h=[10, 20, 30],
     confirm_window_1h=[6, 12, 24],
     stop_buffer_points=[5.0, 10.0, 20.0],
-    risk_pct=[0.01, 0.015, 0.02],
+    # Widened after the first real run showed EVERY signal being skipped
+    # at 1-2% risk - MNQ's typical 4h/1h swing stop distance is simply
+    # wider than a $20-40 budget affords for even 1 contract. Capped at
+    # 5% (still far below the originally-proposed 20%) to find where this
+    # actually becomes tradeable, not to quietly drift back toward unsafe
+    # sizing - if even 5% doesn't produce a real sample, that's a real
+    # finding about this instrument/account-size combination, not a
+    # reason to widen further.
+    risk_pct=[0.01, 0.015, 0.02, 0.03, 0.05],
     # Singleton (not actually swept) - exists only so account_size shows up
     # in best_params/grid results, which is what lets run_for()'s report
     # recognize this strategy sizes off its OWN account instead of falling
@@ -1076,6 +1084,9 @@ def run_backtest_liquidity_sweep(bars_1h, symbol, params):
 
     position = None
     trade_cashflows = []
+    signals_total = 0
+    signals_skipped = 0
+    skipped_stop_distance_sum = 0.0
 
     def close_position(direction, qty, price, avg_entry):
         fill_price = price - slippage_price if direction == "long" else price + slippage_price
@@ -1117,6 +1128,7 @@ def run_backtest_liquidity_sweep(bars_1h, symbol, params):
                 stop_price = pending["sweep_extreme"] - p["stop_buffer_points"]
                 stop_distance = entry_price - stop_price
                 if stop_distance > 0:
+                    signals_total += 1
                     raw_contracts = risk_dollars / (stop_distance * point_value)
                     # Skip the trade (don't force a floor of min_contracts)
                     # when the stop is too wide for even 1 contract to fit
@@ -1128,6 +1140,9 @@ def run_backtest_liquidity_sweep(bars_1h, symbol, params):
                         fill_price = entry_price + slippage_price
                         position = dict(direction="long", size=qty, avg_entry=fill_price, stop=stop_price)
                         trade_cashflows.append(-p["commission_per_contract"] * qty)
+                    else:
+                        signals_skipped += 1
+                        skipped_stop_distance_sum += stop_distance
                 pending["direction"] = None
             else:
                 pending["bars_left"] -= 1
@@ -1139,12 +1154,16 @@ def run_backtest_liquidity_sweep(bars_1h, symbol, params):
                 stop_price = pending["sweep_extreme"] + p["stop_buffer_points"]
                 stop_distance = stop_price - entry_price
                 if stop_distance > 0:
+                    signals_total += 1
                     raw_contracts = risk_dollars / (stop_distance * point_value)
                     if raw_contracts >= p["min_contracts"]:
                         qty = min(p["max_contracts"], int(raw_contracts))
                         fill_price = entry_price - slippage_price
                         position = dict(direction="short", size=qty, avg_entry=fill_price, stop=stop_price)
                         trade_cashflows.append(-p["commission_per_contract"] * qty)
+                    else:
+                        signals_skipped += 1
+                        skipped_stop_distance_sum += stop_distance
                 pending["direction"] = None
             else:
                 pending["bars_left"] -= 1
@@ -1164,6 +1183,9 @@ def run_backtest_liquidity_sweep(bars_1h, symbol, params):
         gross_profit=gross_profit, gross_loss=gross_loss,
         profit_factor=profit_factor,
         max_drawdown=_max_drawdown(trade_cashflows),
+        signals_total=signals_total,
+        signals_skipped=signals_skipped,
+        avg_skipped_stop_distance=(skipped_stop_distance_sum / signals_skipped) if signals_skipped else 0.0,
     )
 
 
@@ -1257,6 +1279,21 @@ def run_for(symbol, interval, strategy_name):
 
     if not top:
         print("  No candidate had enough trades in-sample to evaluate. Try a longer interval.")
+        # If the strategy tracks signal/sizing diagnostics (currently just
+        # liquidity_sweep), show them even here - "no trades" can mean "no
+        # setups happened" or "setups happened but all got sized out,"
+        # which need very different fixes, and the normal report path
+        # never reaches per-combo output when top is empty.
+        diag = strat["run"](in_sample, symbol, {})
+        if diag.get("signals_total") is not None:
+            print(f"  Diagnostic (default params, full in-sample): "
+                  f"signals_total={diag['signals_total']}  "
+                  f"signals_skipped_undersized={diag['signals_skipped']}  "
+                  f"avg_skipped_stop_distance={diag['avg_skipped_stop_distance']:.1f} points")
+            if diag['signals_total'] and diag['signals_skipped'] == diag['signals_total']:
+                print("  -> EVERY signal was skipped for being too large to size at the "
+                      "current risk_pct - the risk budget is too tight for this "
+                      "instrument/timeframe's typical stop distance, not a lack of setups.")
         return
 
     print(f"\n  Most robust {strat['group_by']} groupings (by median profit factor across settings):")
