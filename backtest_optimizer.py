@@ -51,10 +51,16 @@ strategy. Supports four entry-signal families:
     equity curve gave back 80%+ of its peak - NO REAL EDGE, same failure
     pattern as MES mean-reversion (approximation overstated a signal real
     fills didn't back up). DEAD, don't pursue that exact config further.
-    SECOND VERSION (this build, target 20-40pts, a real momentum-scale
-    move instead of a noise-scale one) - same entry trigger, wider grid,
-    NOT YET TESTED. Whether a bigger target changes the outcome is an
-    open question, not an assumption either way.
+    SECOND VERSION (target 20-40pts, a real momentum-scale move instead
+    of a noise-scale one) - TESTED, also DEAD. All three top candidates
+    (30/20, 35/20, 30/12 target/stop) showed out-of-sample PF below 1.0
+    (0.793, 0.865, 0.811) with real sample sizes (50-52 OOS trades each,
+    not a thin fluke) - the entry trigger itself doesn't have real edge
+    at either target scale. Didn't need a TradingView round-trip to
+    confirm this one; the Python result was already consistent and
+    decisive across multiple settings. DEAD - don't pursue this entry
+    signal (fresh VWAP cross + EMA momentum + volume) further at any
+    target scale without a fundamentally different trigger.
   - "liquidity_sweep": swing-trade, multi-timeframe confluence - 4-hour
     structure (liquidity pools = rolling N-bar high/low, built by
     resampling 60-minute bars since Yahoo has no native 4h interval) for
@@ -1373,12 +1379,10 @@ def main():
     for interval in ["5m", "15m"]:
         run_for("MNQ=F", interval, "vwap_pullback")
 
-    # scalp: the original 8-15pt-target version is DEAD (real TradingView
-    # result PF 1.067, win rate barely above the mathematical breakeven
-    # for its own risk:reward) - see docstring above. Re-testing now with
-    # a widened 20-40pt target grid ("quick move" scale instead of
-    # noise-scale) - same entry trigger, first pass at this range.
-    run_for("MNQ=F", "5m", "scalp")
+    # scalp: DEAD at both the original 8-15pt target AND the widened
+    # 20-40pt "quick move" target - see docstring above. Not re-running
+    # it here; the fresh-VWAP-cross entry trigger itself doesn't have
+    # real edge at either scale.
 
     # liquidity_sweep: real data (after fixing two sizing bugs - see
     # docstring above) came back a consistent net LOSER in-sample and

@@ -479,20 +479,20 @@ test_connection.py            # Tradovate direct-API test - only relevant
   signal-only indicator, see "Active setup") is the current plan
   instead. **`vwap_pullback` itself has never been checked for this
   same outlier-dependency problem** — do that before trusting it either.
-- **`scalp`'s original 8-15pt-target config is confirmed dead** — real
-  TradingView result: PF 1.067, win rate 34.69% (barely above the
-  mathematical breakeven of 33.3% for its own 2:1 target:stop), and the
-  equity curve gave back over 80% of its peak by the end of the test.
-  Same failure pattern as MES mean-reversion: this script's own search
-  overstated a real signal that didn't hold up on real fills.
-  `jarvis_scalp_vwap_cross_mnq.pine` (built on that config) should not be
-  pursued further as configured. **Reopened at a wider 20-40pt target**
-  (a real momentum-scale move instead of a noise-scale one) per a
-  request for a "quick move" version — same entry trigger (fresh VWAP
-  cross + EMA momentum + volume), `backtest_optimizer.py`'s grid widened
-  and `scalp` re-added to `main()`. Not yet tested at this range — run it
-  next, same walk-forward-then-TradingView process as everything else.
-  No Pine Script exists for this wider-target version yet.
+- **`scalp` is confirmed dead at both target scales.** Original 8-15pt
+  target: real TradingView result PF 1.067, win rate 34.69% (barely
+  above the mathematical breakeven of 33.3% for its own 2:1
+  target:stop). Widened 20-40pt "quick move" target (same fresh-VWAP-
+  cross-+-EMA-momentum-+-volume entry trigger, tried per a request to
+  test a real momentum-scale move instead of a noise-scale one): all
+  three top candidates showed out-of-sample PF below 1.0 (0.793, 0.865,
+  0.811) on real sample sizes (50-52 OOS trades each) — decisive enough
+  in the Python search alone that a TradingView round-trip wasn't needed
+  to confirm it. The entry trigger itself doesn't have real edge at any
+  target scale tried. `jarvis_scalp_vwap_cross_mnq.pine` stays in the
+  repo for reference; no Pine Script was built for the wider-target
+  version since it never cleared the Python walk-forward bar. Not
+  re-run by `main()` anymore.
 - **`liquidity_sweep` is confirmed dead** — see "New: liquidity-sweep
   swing trade research" above. Two real sizing bugs were found and fixed
   along the way, but once real trades were produced at a safe risk_pct
