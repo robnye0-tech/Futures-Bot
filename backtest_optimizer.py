@@ -1352,29 +1352,26 @@ def main():
     # MES dropped entirely per real TradingView results (meanrev held up on
     # MNQ 5m, did not hold up on MES 5m) - MNQ only from here on.
     #
-    # vwap_pullback: real TradingView test of the 5m default (1.5x ATR
-    # stop, 3-9 contracts) came back PF 1.527 / 52 trades / $4,928 net but
-    # with a $3,570 max drawdown against the account's real $2,000 EOD
-    # trailing drawdown limit - re-running now with the widened
-    # stop_atr_mult grid (down to 0.5x) to see if a tighter stop holds the
-    # same edge at a size that actually fits the account. Also re-checking
-    # 15m, though a first real TradingView pass on 15m already came back
-    # PF ~1.05 (no real edge) with the corrected ADX 20-40/EMA 10-100
-    # inputs - don't expect that one to improve just from a tighter stop.
+    # vwap_pullback: tighter stops (down to 0.5x ATR) were tested and
+    # confirmed to NOT work (OOS PF 0.000) - the original 1.5x ATR/
+    # ADX 15-30 config keeps holding up instead across re-runs (latest:
+    # PF 1.087, 27 trades, $1,201.50 max drawdown - now under the $1,300
+    # safety budget at default 3/3/9 sizing on this window). Still
+    # running both 5m/15m each time to keep confirming that holds as new
+    # data comes in. 15m has no real edge (PF ~1.05 on real TradingView
+    # data) - kept only as a comparison, not expected to improve.
     for interval in ["5m", "15m"]:
         run_for("MNQ=F", interval, "vwap_pullback")
 
-    # scalp: real TradingView result on this script's own top candidate
-    # came back PF 1.067 / win rate barely above the mathematical
-    # breakeven for its own risk:reward - DEAD, no real edge. Not
-    # re-running it here anymore; see docstring above for the full result.
+    # scalp: real TradingView result (PF 1.067, win rate barely above the
+    # mathematical breakeven for its own risk:reward) - DEAD, no real
+    # edge. Not re-running it here; see docstring above for the full result.
 
-    # liquidity_sweep: brand new, multi-timeframe (4h structure / 1h
-    # trigger) swing-trade candidate for the separate $2,000 cash
-    # account, built from 60-minute data (Yahoo allows ~2 years of it,
-    # vastly more than the 60-day cap on 5m/15m). Completely untested -
-    # this is the first walk-forward pass.
-    run_for("MNQ=F", "60m", "liquidity_sweep")
+    # liquidity_sweep: real data (after fixing two sizing bugs - see
+    # docstring above) came back a consistent net LOSER in-sample and
+    # out-of-sample across multiple settings at a safe risk_pct (up to
+    # 5%) - DEAD as designed, not re-running it here. Would need a
+    # genuinely different rule set to revisit, not more grid search.
 
 
 if __name__ == "__main__":

@@ -147,21 +147,18 @@ What it does:
 It supports six strategy families (`crossover`, `orb`, `meanrev`,
 `vwap_pullback`, `scalp`, `liquidity_sweep` — see `STRATEGIES` dict in
 the script). `main()` currently runs, MNQ only (MES dropped):
-- `vwap_pullback` on 5m/15m — re-running with a widened `stop_atr_mult`
-  grid (down to 0.5x ATR) to find a config that holds the real 5-minute
-  edge (PF 1.527 confirmed on TradingView) within the account's real
-  $2,000 drawdown budget, since the tested 3/3/9-contract config drew
-  down $3,570 — see Pine Script section above and "Position sizing"
-  below.
-- `liquidity_sweep` on 60m — see "New: liquidity-sweep swing trade
-  research" below.
+- `vwap_pullback` on 5m/15m — the ADX 15-30/1.5x-ATR config keeps holding
+  up out-of-sample across re-runs (latest: PF 1.087, 27 trades, $1,201.50
+  max drawdown — now under the $1,300 safety budget at default 3/3/9
+  sizing on this window) while every tighter-stop variant keeps failing.
+  Real signal, needs a fresh TradingView confirmation pass at this
+  config — see Pine Script section above and "Position sizing" below.
 
-`scalp` is no longer run by `main()` — its real TradingView result (PF
-1.067, win rate barely above the mathematical breakeven for its own
-risk:reward) confirmed it has no real edge. `meanrev`'s best result (MNQ
-5m) already has real TradingView confirmation — see the Pine Script
-section above — but its most recent real test raised a serious open
-question about whether that edge is repeatable (see "Open items").
+`scalp` and `liquidity_sweep` are no longer run by `main()` — both are
+confirmed dead on real data (see their sections above). `meanrev`'s best
+result (MNQ 5m) already has real TradingView confirmation — see the Pine
+Script section above — but its most recent real test raised a serious
+open question about whether that edge is repeatable (see "Open items").
 `crossover` and `orb` are kept only for reference; both have already
 been tested and shown to lack real out-of-sample edge.
 
@@ -204,36 +201,31 @@ One practical bonus: this uses 60-minute data, which Yahoo allows up to
 limited every other result in this README to one test window. See
 "Getting a longer backtest window" below for why that cap exists.
 
-**Status: first real run found a real sizing bug, now fixed, needs a
-re-run.** The entry/exit logic was verified correct via an engineered
-test scenario before the first run (same standard every other strategy
-here went through), but that first run against real 60-minute MNQ data
-(2024-03-28 to 2026-08-20) surfaced something the engineered test
-couldn't catch: max drawdown came back near/over the *entire* $2,000
-account (e.g. $2,288) even at the default `risk_pct=0.01` ($20/trade
-target). Cause: position size was floored to a minimum of 1 contract
-even when the stop was too wide for 1 contract to fit the risk budget —
-silently risking far more than intended on exactly the widest-stop
-trades. **Fixed**: a trade is now skipped entirely, rather than forced
-to 1 contract, whenever the stop is too wide for the risk budget —
-standard risk-based sizing practice. A separate reporting bug (this
-strategy's drawdown check was printing the *Tradeify prop account's*
-$2,000/$1,300 numbers instead of its own $2,000 cash account's) is also
-fixed. **Every result from before this fix should be treated as
-invalid** — the sizing itself was wrong, not just the parameters.
-
-The re-run after that fix came back empty ("no candidate had enough
-trades") — not a bug, the fix correctly skipping nearly every signal:
-MNQ's typical 4h/1h swing stop distance is wider than a 1-2% ($20-40)
-risk budget affords for even 1 contract. `risk_pct` is now grid-searched
-up to 5% (still far below the originally-proposed 20%) to find where
-this becomes tradeable, and the report now shows `signals_total` /
-`signals_skipped_undersized` / `avg_skipped_stop_distance` diagnostics
-even on an empty result, so it's visible *why* rather than just "no
-data." Run `python backtest_optimizer.py` (or `research_runner.py` to
-log it) again — if even 5% produces nothing, that's a real finding about
-whether this instrument/timeframe fits a $2,000 account at all, not
-something to keep raising the risk fraction to fix.
+**Status: DEAD — real data, decisive negative result. Do not pursue this
+exact design further.** Two sizing bugs were found and fixed along the
+way (a minimum-1-contract floor that silently over-risked wide-stop
+trades, and a reporting bug that showed the wrong account's drawdown
+budget) — both are fixed and the diagnostics they left behind
+(`signals_total` / `signals_skipped_undersized` / `avg_skipped_stop_distance`
+on `run_backtest_liquidity_sweep()`'s stats, printed even when no
+candidate survives) are still useful for any future strategy that sizes
+off risk_pct. But once real trades were actually produced (`risk_pct`
+widened to 5%, still nowhere near the original unsafe 20%), the result
+was clear: **it loses money**, consistently, in both the in-sample and
+out-of-sample windows, across multiple structural settings (`sweep_lookback_4h`
+20 and 30 both showed net losses in-sample AND out-of-sample). The one
+candidate that looked good (PF ~22) was built on 6 in-sample trades and
+produced **zero trades in the entire ~9-month out-of-sample window** —
+the same small-sample-luck pattern flagged elsewhere in this README
+(the ORB 26-trade lead, vwap_pullback's 15-trade PF-7.39 spike), not a
+real signal. This matches the risk flagged when this idea was first
+discussed: ICT/Smart Money Concepts-style setups are notoriously hard to
+reduce to fully objective, backtestable rules, and that's what happened
+here when it was actually tried. Continuing to widen `risk_pct` or
+reshuffle lookback windows chasing a positive number from here would be
+curve-fitting, not research — the same mistake this whole project has
+been built to avoid. Revisiting this idea would need a genuinely
+different rule set, not more grid search on this one.
 
 ### Position sizing (Tradeify prop account): size from the drawdown budget, not from margin capacity
 
@@ -457,13 +449,12 @@ test_connection.py            # Tradovate direct-API test - only relevant
   didn't hold up on real fills. `jarvis_scalp_vwap_cross_mnq.pine` stays
   in the repo for reference but should not be pursued further as
   configured.
-- **`liquidity_sweep` needs a re-run after a real sizing bug fix** — see
-  "New: liquidity-sweep swing trade research" above. First real run
-  produced max drawdowns near/over the entire $2,000 account even at 1%
-  target risk per trade, caused by flooring position size to 1 contract
-  on stops too wide for that risk budget. Fixed (skip the trade instead
-  of forcing 1 contract) — every result from before the fix is invalid,
-  run it again.
+- **`liquidity_sweep` is confirmed dead** — see "New: liquidity-sweep
+  swing trade research" above. Two real sizing bugs were found and fixed
+  along the way, but once real trades were produced at a safe risk_pct
+  (up to 5%), the result was a consistent net loss in-sample and
+  out-of-sample across multiple settings. Not a candidate as designed;
+  would need a genuinely different rule set to revisit, not more tuning.
 - **Every result in this repo is from a single ~10-week backtest window**
   — see "Getting a longer backtest window" above for real options (none
   of them free AND unlimited). Treat every "held up out-of-sample"
