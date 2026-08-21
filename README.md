@@ -308,6 +308,15 @@ PnL checks that killed `meanrev` and caught `vwap_pullback`'s sizing
 problem. Every strategy that skipped straight to looking good before
 that step failed once real data arrived.
 
+**Locked requirement for the live version**: trade only on a fully
+closed 5-minute candle's confirmed signal — never an intrabar tick that
+could still reverse before the bar closes ("repainting"). This Python
+simulation already satisfies it by construction (Yahoo has no intrabar
+data). The eventual `strategy()` script must enforce it with
+`calc_on_every_tick = false` + `process_orders_on_close = true` — the
+same combination every other `strategy()` script in this repo already
+uses, not a new mechanism.
+
 ### Position sizing (Tradeify prop account): size from the drawdown budget, not from margin capacity
 
 The Tradeify account allows up to 40 MNQ contracts on margin, but that

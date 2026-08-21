@@ -118,6 +118,21 @@ strategy. Supports four entry-signal families:
     for a robustness check. Brand new, logic-verified via an engineered
     trend-reversal scenario but not yet run against real data.
 
+    LOCKED REQUIREMENT for the eventual live Pine strategy(): trade only
+    on a fully CLOSED 5-minute candle's confirmed signal - never an
+    intrabar tick that could still reverse before the bar closes (Pine
+    "repainting"). This Python simulation already satisfies it by
+    construction (Yahoo only provides closed-bar data, no intrabar
+    ticks). The live script must enforce it with calc_on_every_tick =
+    false + process_orders_on_close = true in the strategy() declaration
+    - the same pattern every other strategy() script in this repo
+    already uses (jarvis_meanrev_vwap_scaler.pine,
+    jarvis_vwap_pullback_mnq.pine, jarvis_scalp_vwap_cross_mnq.pine) -
+    not a new mechanism, just carried forward to this one. If an
+    alert-based signal indicator (like jarvis_vwap_pullback_signals_mnq.pine)
+    is ever built for this instead, the TradingView alert itself must be
+    set to "Once Per Bar Close," not "Once Per Bar" or intrabar.
+
 MES was tested on both meanrev and vwap_pullback and dropped entirely
 per user direction - real TradingView results never held up on MES the
 way they did on MNQ, despite promising signals from this script's own
