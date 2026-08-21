@@ -581,10 +581,16 @@ def run_for(symbol, interval, strategy_name):
             print(f"      !! max_drawdown ${oos_stats['max_drawdown']:.2f} exceeds the "
                   f"${DRAWDOWN_SAFETY_BUDGET:.0f} safety budget (real account trailing "
                   f"drawdown limit: ${ACCOUNT_TRAILING_DRAWDOWN_LIMIT:.0f}).")
-            sug_base, sug_max = suggest_size_for_budget(
-                oos_stats["max_drawdown"], best_params["base_size"], best_params["max_size"])
+            # base_size/max_size are never swept in VWAPPB_GRID, so they're
+            # never in best_params (which only holds the grid keys that
+            # were actually varied) - fall back to the defaults that were
+            # actually used at runtime (run_backtest_vwap_pullback merges
+            # {**VWAPPB_DEFAULTS, **params} internally).
+            base_size = best_params.get("base_size", VWAPPB_DEFAULTS["base_size"])
+            max_size = best_params.get("max_size", VWAPPB_DEFAULTS["max_size"])
+            sug_base, sug_max = suggest_size_for_budget(oos_stats["max_drawdown"], base_size, max_size)
             print(f"      -> Rough linear-scaling suggestion: base_size={sug_base}, "
-                  f"max_size={sug_max} (was {best_params['base_size']}/{best_params['max_size']}). "
+                  f"max_size={sug_max} (was {base_size}/{max_size}). "
                   f"RE-RUN at this size to confirm, don't just trust the scaling math - "
                   f"stop-loss noise doesn't scale perfectly linearly in practice.")
 
