@@ -267,7 +267,7 @@ curve-fitting, not research — the same mistake this whole project has
 been built to avoid. Revisiting this idea would need a genuinely
 different rule set, not more grid search on this one.
 
-### New: UT Bot (ATR trailing-stop stop-and-reverse, separate $2,000 cash account)
+### New: UT Bot (ATR trailing-stop stop-and-reverse, Tradeify prop account)
 
 A faithful port of the well-known public "UT Bot Alerts" Pine indicator
 (Kivanç Özbilgiç) — fully mechanical (an ATR-based trailing stop that
@@ -282,15 +282,20 @@ signals manually — a deliberate choice, not scope drift, but worth
 naming since it reverses that decision.
 
 `run_backtest_ut_bot()` in `backtest_optimizer.py` implements this on
-the separate $2,000 cash account (same one `liquidity_sweep` used, not
-the Tradeify prop account): 2% risk per trade, position size (1-5
-contracts) derived from the stop distance at entry, same
-skip-don't-force discipline `liquidity_sweep` needed after its sizing
-bug — a trade is skipped, not forced to 1 contract, when even 1 contract
-would risk more than the budget. Requested sensitivity (`key_value=2`)
-is the default, grid-searched 1.0–3.0 for a robustness check (the same
-reason every other strategy here gets neighborhood-tested instead of
-trusting one hand-picked value).
+the **Tradeify prop account** (corrected after an initial mix-up with
+`liquidity_sweep`'s separate $2,000 cash account — same dollar figure,
+different meaning): 2% risk per trade against the confirmed **$2,000 EOD
+trailing drawdown limit** (`ACCOUNT_TRAILING_DRAWDOWN_LIMIT`, the same
+constant `vwap_pullback`/`meanrev` are checked against), not a capital
+balance — still $40/trade target risk by coincidence of the number, not
+because it's the same account. Position size (1-5 contracts) is derived
+from the stop distance at entry, same skip-don't-force discipline
+`liquidity_sweep` needed after its sizing bug — a trade is skipped, not
+forced to 1 contract, when even 1 contract would risk more than the
+budget. Requested sensitivity (`key_value=2`) is the default,
+grid-searched 1.0–3.0 for a robustness check (the same reason every
+other strategy here gets neighborhood-tested instead of trusting one
+hand-picked value).
 
 **Status: brand new, first walk-forward pass pending.** Entry/exit logic
 verified correct via an engineered trend-reversal scenario (same

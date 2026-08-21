@@ -106,13 +106,17 @@ strategy. Supports four entry-signal families:
     discretionary judgment calls, unlike liquidity_sweep's ICT-adjacent
     design). Entries AND exits both driven by the same signal (price
     crossing the trailing stop flips the position) - no separate fixed
-    stop-loss, the reversal itself is the risk control. Same separate
-    $2,000 cash account as liquidity_sweep, 2% risk per trade, 1-5
+    stop-loss, the reversal itself is the risk control. Tradeify PROP
+    account this time (corrected after an initial mix-up), NOT the
+    separate $2,000 cash account liquidity_sweep used - 2% risk per
+    trade is against the confirmed $2,000 EOD trailing drawdown LIMIT
+    (ACCOUNT_TRAILING_DRAWDOWN_LIMIT), not a capital balance, still
+    $40/trade target risk by coincidence of the same number. 1-5
     contracts derived from the stop distance at entry (same
-    skip-don't-force discipline). Requested sensitivity (key_value) of 2
-    is the default, grid-searched 1.0-3.0 for a robustness check. Brand
-    new, logic-verified via an engineered trend-reversal scenario but not
-    yet run against real data.
+    skip-don't-force discipline liquidity_sweep needed). Requested
+    sensitivity (key_value) of 2 is the default, grid-searched 1.0-3.0
+    for a robustness check. Brand new, logic-verified via an engineered
+    trend-reversal scenario but not yet run against real data.
 
 MES was tested on both meanrev and vwap_pullback and dropped entirely
 per user direction - real TradingView results never held up on MES the
@@ -1225,8 +1229,14 @@ def run_backtest_liquidity_sweep(bars_1h, symbol, params):
 
 UTBOT_DEFAULTS = dict(
     key_value=2.0, atr_period=10,
-    account_size=2000.0,   # the separate $2,000 CASH account, not the Tradeify prop account
-    risk_pct=0.02,          # 2% per trade, as requested - $40 target risk on this account
+    # Tradeify prop account, NOT the separate $2,000 cash account -
+    # sizing keys off the confirmed $2,000 EOD trailing drawdown LIMIT
+    # (ACCOUNT_TRAILING_DRAWDOWN_LIMIT, same constant vwap_pullback/
+    # meanrev use), not a total-capital balance. 2% of that limit = $40
+    # target risk per trade - same number liquidity_sweep's cash-account
+    # version used, different meaning (that was 2% of the total account;
+    # this is 2% of the max-tolerable-loss rule).
+    risk_pct=0.02,
     min_contracts=1, max_contracts=5,
     session_start=(9, 30), session_end=(16, 0),
     commission_per_contract=1.0,
@@ -1235,15 +1245,16 @@ UTBOT_DEFAULTS = dict(
 
 # key_value swept around the requested sensitivity of 2 for a robustness
 # check (same reason every other strategy here gets neighborhood-tested,
-# not just the single requested value) - risk_pct/account_size are
-# singletons (not actually swept) so they show up in best_params, which
-# is what lets run_for()'s report recognize this strategy sizes off its
-# own account (see the account_size comment on LIQSWEEP_GRID for why).
+# not just the single requested value) - risk_pct is a singleton (not
+# actually swept) so it shows up in best_params for the report. No
+# account_size here (unlike LIQSWEEP_GRID) - this strategy uses the
+# module-level ACCOUNT_TRAILING_DRAWDOWN_LIMIT constant directly, so
+# run_for()'s report correctly falls through to the Tradeify prop
+# account budget check instead of the cash-account one.
 UTBOT_GRID = dict(
     key_value=[1.0, 1.5, 2.0, 2.5, 3.0],
     atr_period=[10, 14, 20],
     risk_pct=[UTBOT_DEFAULTS["risk_pct"]],
-    account_size=[UTBOT_DEFAULTS["account_size"]],
 )
 
 
@@ -1275,7 +1286,9 @@ def run_backtest_ut_bot(bars, symbol, params):
 
     point_value = POINT_VALUE[symbol]
     slippage_price = TICK_SIZE[symbol] * p["slippage_ticks"]
-    risk_dollars = p["account_size"] * p["risk_pct"]
+    # Tradeify prop account: risk_pct applies against the confirmed
+    # $2,000 EOD trailing drawdown LIMIT, not a cash balance.
+    risk_dollars = ACCOUNT_TRAILING_DRAWDOWN_LIMIT * p["risk_pct"]
 
     position = None
     trade_cashflows = []
@@ -1564,7 +1577,8 @@ def main():
 
     # ut_bot: brand new, first walk-forward pass. Requested sensitivity
     # (key_value=2) plus a robustness sweep either side of it (1.0-3.0).
-    # Separate $2,000 cash account, 2% risk per trade.
+    # Tradeify prop account (corrected from an initial cash-account
+    # mix-up) - 2% risk against the $2,000 trailing drawdown limit.
     run_for("MNQ=F", "5m", "ut_bot")
 
 
