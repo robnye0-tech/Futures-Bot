@@ -115,8 +115,13 @@ strategy. Supports four entry-signal families:
     contracts derived from the stop distance at entry (same
     skip-don't-force discipline liquidity_sweep needed). Requested
     sensitivity (key_value) of 2 is the default, grid-searched 1.0-3.0
-    for a robustness check. Brand new, logic-verified via an engineered
-    trend-reversal scenario but not yet run against real data.
+    for a robustness check. FIRST REAL RUN: at 2% risk, every one of 151
+    signals got skipped for being oversized (avg stop distance 114.9
+    points needs ~$230 for 1 contract vs. the $40 budget at 2%) - same
+    situation liquidity_sweep hit initially, not a bug. risk_pct widened
+    to [0.02, 0.03, 0.05, 0.08, 0.10] to find where this becomes
+    tradeable at all - still capped well below the originally-proposed
+    20%. Re-run pending at the wider range.
 
     LOCKED REQUIREMENT for the eventual live Pine strategy(): trade only
     on a fully CLOSED 5-minute candle's confirmed signal - never an
@@ -1269,7 +1274,15 @@ UTBOT_DEFAULTS = dict(
 UTBOT_GRID = dict(
     key_value=[1.0, 1.5, 2.0, 2.5, 3.0],
     atr_period=[10, 14, 20],
-    risk_pct=[UTBOT_DEFAULTS["risk_pct"]],
+    # Widened after the first real run: at 2% risk (against the $2,000
+    # drawdown LIMIT, not total capital), every one of 151 signals got
+    # skipped - avg stop distance was 114.9 points, needing ~$230 to
+    # size 1 contract vs. the $40 budget at 2%. Same situation
+    # liquidity_sweep hit initially. Capped at 10% here (still nowhere
+    # near the originally-proposed 20%, and a much smaller fraction than
+    # that once you remember this is against the drawdown LIMIT, not
+    # capital) to find where this actually becomes tradeable.
+    risk_pct=[0.02, 0.03, 0.05, 0.08, 0.10],
 )
 
 

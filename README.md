@@ -297,16 +297,20 @@ grid-searched 1.0–3.0 for a robustness check (the same reason every
 other strategy here gets neighborhood-tested instead of trusting one
 hand-picked value).
 
-**Status: brand new, first walk-forward pass pending.** Entry/exit logic
-verified correct via an engineered trend-reversal scenario (same
-standard every strategy here clears before being trusted at all), not
-yet run against real data. **Full auto-execution (PickMyTrade wiring)
-will not be built until this passes the same bar everything else here
-had to clear**: Python walk-forward search, then real TradingView
-Strategy Tester confirmation — including the max-drawdown and Outliers
-PnL checks that killed `meanrev` and caught `vwap_pullback`'s sizing
-problem. Every strategy that skipped straight to looking good before
-that step failed once real data arrived.
+**Status: first real run hit the same sizing wall `liquidity_sweep` hit
+initially — not a bug.** At the requested 2% risk (against the $2,000
+drawdown limit), every one of 151 signals got skipped: average stop
+distance was 114.9 points, needing ~$230 to size 1 contract against a
+$40 budget at 2%. `risk_pct` widened to [0.02, 0.03, 0.05, 0.08, 0.10]
+— still well below the originally-proposed 20% — to find where this
+actually becomes tradeable. Re-run pending at the wider range. **Full
+auto-execution (PickMyTrade wiring) will not be built until this passes
+the same bar everything else here had to clear**: Python walk-forward
+search, then real TradingView Strategy Tester confirmation — including
+the max-drawdown and Outliers PnL checks that killed `meanrev` and
+caught `vwap_pullback`'s sizing problem. Every strategy that skipped
+straight to looking good before that step failed once real data
+arrived.
 
 **Locked requirement for the live version**: trade only on a fully
 closed 5-minute candle's confirmed signal — never an intrabar tick that
