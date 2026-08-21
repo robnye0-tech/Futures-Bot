@@ -589,6 +589,61 @@ def run_for(symbol, interval, strategy_name):
                   f"stop-loss noise doesn't scale perfectly linearly in practice.")
 
 
+# ---------------------------------------------------------------------
+# Sizing sweep - the confirmed-good config (ADX 15-30, trend EMA 10/50,
+# 1.5x ATR stop) at several explicit contract sizes, so ONE run answers
+# "what size actually fits the account" instead of guessing from
+# linear-scaling math or testing one size per round trip. Runs on the
+# FULL dataset (not in-sample/out-of-sample split) since sizing isn't
+# being searched/optimized here - only the ADX/trend/stop parameters
+# were walk-forward tested, sizing is a separate, later question about
+# an already-fixed signal, so there's no overfitting risk in using all
+# the data to answer it.
+#
+# PF should stay roughly flat across sizes (win/loss ratio doesn't
+# change with contract count, aside from integer-rounding on partial
+# exits) - the number that actually MOVES with size, and the one that
+# matters, is max_drawdown. That's what determines which sizes are
+# actually safe for the account's $2,000 limit.
+# ---------------------------------------------------------------------
+SIZE_SWEEP_CONFIG = dict(
+    adx_low=15, adx_high=30,
+    trend_fast_len=10, trend_slow_len=50,
+    stop_atr_mult=1.5,
+)
+
+SIZE_CANDIDATES = [
+    (1, 2), (1, 3), (1, 4), (2, 4), (2, 6), (3, 6), (3, 9),
+]
+
+
+def run_sizing_sweep(symbol="MNQ=F", interval="5m"):
+    print(f"\n{'=' * 70}\nSIZING SWEEP  |  {symbol}  |  {interval}  |  "
+          f"fixed config: {SIZE_SWEEP_CONFIG}\n{'=' * 70}")
+    try:
+        bars = fetch_bars(symbol, interval)
+    except Exception as e:
+        print(f"  Could not fetch data: {type(e).__name__}: {e}")
+        return
+
+    print(f"  Fetched {len(bars)} bars ({bars[0]['dt'].date()} to {bars[-1]['dt'].date()}) - full dataset, no split")
+    print(f"  (safety budget: ${DRAWDOWN_SAFETY_BUDGET:.0f}  |  hard account limit: ${ACCOUNT_TRAILING_DRAWDOWN_LIMIT:.0f})\n")
+
+    for base, mx in SIZE_CANDIDATES:
+        params = {**SIZE_SWEEP_CONFIG, "base_size": base, "max_size": mx}
+        stats = run_backtest_vwap_pullback(bars, symbol, params)
+        dd = stats["max_drawdown"]
+        if dd > ACCOUNT_TRAILING_DRAWDOWN_LIMIT:
+            flag = "  !! EXCEEDS THE $2,000 HARD LIMIT - not tradeable at this size"
+        elif dd > DRAWDOWN_SAFETY_BUDGET:
+            flag = "  !! over the $1,300 safety budget"
+        else:
+            flag = "  OK - within safety budget"
+        print(f"  base={base}  max={mx}:  PF={stats['profit_factor']:.3f}  "
+              f"events={stats['events']}  net=${stats['net_pnl']:.2f}  "
+              f"max_drawdown=${dd:.2f}{flag}")
+
+
 def main():
     # vwap_pullback only. See module docstring for why everything else
     # that used to run here was removed. Still running both 5m/15m each
@@ -597,6 +652,11 @@ def main():
     # change) rather than something to chase.
     for interval in ["5m", "15m"]:
         run_for("MNQ=F", interval, "vwap_pullback")
+
+    # Sizing sweep on the confirmed-good 5m config - answers "what size
+    # actually fits the account" directly instead of via linear-scaling
+    # guesses. See function docstring above.
+    run_sizing_sweep("MNQ=F", "5m")
 
 
 if __name__ == "__main__":

@@ -128,6 +128,11 @@ What it does:
    $1,300 safety budget (under the real $2,000 account limit) with a
    rough linear-scaling size suggestion — treat that as a starting point
    to re-test, not a validated answer.
+6. Runs a **sizing sweep**: the confirmed-good config (ADX 15-30, trend
+   EMA 10/50, 1.5x ATR stop) at seven explicit contract sizes on the
+   full dataset, printing PF/events/net/drawdown side by side so it's
+   clear which sizes actually fit the account's real limit — directly,
+   not via linear-scaling guesses.
 
 One important reading note: a candidate can show a "held up" verdict
 with a very small out-of-sample trade count (single digits) if the
@@ -236,8 +241,13 @@ templates/, test_connection.py, requirements.txt
 - **Sizing fix needs TradingView re-confirmation** — real result was PF
   1.527 / 52 trades / $4,928 net but $3,570 max drawdown against the
   $2,000 limit at 3/3/9 sizing. Tightening the stop was tried and failed
-  (0.5x ATR broke the edge). Re-test in TradingView at roughly 1 base /
-  3–4 max contracts, original 1.5x ATR stop.
+  (0.5x ATR broke the edge). `backtest_optimizer.py`'s `run_sizing_sweep()`
+  (part of `main()`, runs automatically) tests the confirmed-good config
+  at seven explicit sizes — 1/2, 1/3, 1/4, 2/4, 2/6, 3/6, 3/9 (base/max)
+  — on the full dataset in one pass, flagging which fit the $1,300 safety
+  budget and which exceed the $2,000 hard limit, instead of guessing from
+  linear-scaling math. Re-test whichever size it flags as safe in
+  TradingView to confirm the real numbers agree.
 - **Outlier-dependency check still pending** — this strategy has never
   been checked for the same problem that killed an earlier candidate
   (profit concentrated in a handful of oversized trades, not a real
