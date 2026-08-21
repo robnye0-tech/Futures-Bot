@@ -93,8 +93,26 @@ strategy. Supports four entry-signal families:
     don't force them). Also fixed the report's drawdown-budget check,
     which was printing the Tradeify prop account's $2,000/$1,300 numbers
     for this strategy's separate cash account (account_size wasn't
-    reaching best_params before). Needs a fresh run post-fix before any
-    result here means anything - this is still a hypothesis.
+    reaching best_params before). POST-FIX RESULT: DEAD. At a safe
+    risk_pct (widened up to 5%, nowhere near the originally-proposed
+    20%), it lost money consistently in-sample and out-of-sample across
+    multiple sweep_lookback_4h settings; the one candidate that looked
+    good (PF ~22) was built on 6 trades and produced zero trades in the
+    entire ~9-month out-of-sample window - small-sample noise, not
+    signal. Not re-run by main() anymore - would need a genuinely
+    different rule set to revisit, not more grid search on this one.
+  - "ut_bot": ATR trailing-stop stop-and-reverse - faithful port of the
+    public "UT Bot Alerts" Pine indicator (fully mechanical, no
+    discretionary judgment calls, unlike liquidity_sweep's ICT-adjacent
+    design). Entries AND exits both driven by the same signal (price
+    crossing the trailing stop flips the position) - no separate fixed
+    stop-loss, the reversal itself is the risk control. Same separate
+    $2,000 cash account as liquidity_sweep, 2% risk per trade, 1-5
+    contracts derived from the stop distance at entry (same
+    skip-don't-force discipline). Requested sensitivity (key_value) of 2
+    is the default, grid-searched 1.0-3.0 for a robustness check. Brand
+    new, logic-verified via an engineered trend-reversal scenario but not
+    yet run against real data.
 
 MES was tested on both meanrev and vwap_pullback and dropped entirely
 per user direction - real TradingView results never held up on MES the
@@ -1205,11 +1223,165 @@ def run_backtest_liquidity_sweep(bars_1h, symbol, params):
     )
 
 
+UTBOT_DEFAULTS = dict(
+    key_value=2.0, atr_period=10,
+    account_size=2000.0,   # the separate $2,000 CASH account, not the Tradeify prop account
+    risk_pct=0.02,          # 2% per trade, as requested - $40 target risk on this account
+    min_contracts=1, max_contracts=5,
+    session_start=(9, 30), session_end=(16, 0),
+    commission_per_contract=1.0,
+    slippage_ticks=2,
+)
+
+# key_value swept around the requested sensitivity of 2 for a robustness
+# check (same reason every other strategy here gets neighborhood-tested,
+# not just the single requested value) - risk_pct/account_size are
+# singletons (not actually swept) so they show up in best_params, which
+# is what lets run_for()'s report recognize this strategy sizes off its
+# own account (see the account_size comment on LIQSWEEP_GRID for why).
+UTBOT_GRID = dict(
+    key_value=[1.0, 1.5, 2.0, 2.5, 3.0],
+    atr_period=[10, 14, 20],
+    risk_pct=[UTBOT_DEFAULTS["risk_pct"]],
+    account_size=[UTBOT_DEFAULTS["account_size"]],
+)
+
+
+# ---------------------------------------------------------------------
+# Strategy 7: UT Bot Alerts - ATR trailing-stop stop-and-reverse
+#
+# Faithful port of the well-known public "UT Bot Alerts" Pine indicator
+# (Kivanc Ozbilgic) - fully mechanical, no discretionary judgment calls
+# to approximate (unlike liquidity_sweep's ICT-adjacent design), so this
+# translation should track the real Pine behavior closely. An ATR-based
+# trailing stop line only ever tightens in the position's favor; price
+# crossing it flips the position (stop-and-reverse - always long or
+# short once the first signal fires, never flat by design, same as the
+# original). Entries AND exits are both driven purely by that same
+# signal, per request - there is no separate fixed stop-loss layered on
+# top; the reversal itself is the risk control.
+#
+# Position size is DERIVED from the stop distance at the moment of entry
+# (which works out to key_value * ATR, the same distance the trailing
+# stop was placed at) to target a fixed risk_pct of the $2,000 cash
+# account, clamped 1-5 contracts - same discipline as liquidity_sweep:
+# a trade is SKIPPED, not forced to 1 contract, when even 1 contract
+# would risk more than the budget.
+# ---------------------------------------------------------------------
+def run_backtest_ut_bot(bars, symbol, params):
+    p = {**UTBOT_DEFAULTS, **params}
+    closes = [b["close"] for b in bars]
+    atr = atr_series(bars, p["atr_period"])
+
+    point_value = POINT_VALUE[symbol]
+    slippage_price = TICK_SIZE[symbol] * p["slippage_ticks"]
+    risk_dollars = p["account_size"] * p["risk_pct"]
+
+    position = None
+    trade_cashflows = []
+    signals_total = 0
+    signals_skipped = 0
+    skipped_stop_distance_sum = 0.0
+
+    def close_position(direction, qty, price, avg_entry):
+        fill_price = price - slippage_price if direction == "long" else price + slippage_price
+        per_contract = (fill_price - avg_entry) if direction == "long" else (avg_entry - fill_price)
+        trade_cashflows.append(per_contract * point_value * qty - p["commission_per_contract"] * qty)
+
+    prev_stop = 0.0
+    prev_src = closes[0]
+
+    for i in range(1, len(bars)):
+        if atr[i] is None:
+            prev_src = closes[i]
+            continue
+
+        src = closes[i]
+        n_loss = p["key_value"] * atr[i]
+
+        # Faithful port of xATRTrailingStop's three-branch update - only
+        # ever tightens toward price in the held direction, never loosens.
+        if src > prev_stop and prev_src > prev_stop:
+            new_stop = max(prev_stop, src - n_loss)
+        elif src < prev_stop and prev_src < prev_stop:
+            new_stop = min(prev_stop, src + n_loss)
+        elif src > prev_stop:
+            new_stop = src - n_loss
+        else:
+            new_stop = src + n_loss
+
+        # ema(src, 1) == src exactly (smoothing factor 1), so this is
+        # crossover(src, stop) / crossover(stop, src) directly.
+        above = src > new_stop and prev_src <= prev_stop
+        below = new_stop > src and prev_stop <= prev_src
+        buy_signal = src > new_stop and above
+        sell_signal = src < new_stop and below
+
+        can_trade = _in_session(bars[i]["dt"], p["session_start"], p["session_end"])
+
+        if can_trade and buy_signal:
+            signals_total += 1
+            if position is not None and position["direction"] == "short":
+                close_position("short", position["size"], src, position["avg_entry"])
+                position = None
+            if position is None:
+                stop_distance = abs(src - new_stop)
+                if stop_distance > 0:
+                    raw_contracts = risk_dollars / (stop_distance * point_value)
+                    if raw_contracts >= p["min_contracts"]:
+                        qty = min(p["max_contracts"], int(raw_contracts))
+                        fill_price = src + slippage_price
+                        position = dict(direction="long", size=qty, avg_entry=fill_price)
+                        trade_cashflows.append(-p["commission_per_contract"] * qty)
+                    else:
+                        signals_skipped += 1
+                        skipped_stop_distance_sum += stop_distance
+        elif can_trade and sell_signal:
+            signals_total += 1
+            if position is not None and position["direction"] == "long":
+                close_position("long", position["size"], src, position["avg_entry"])
+                position = None
+            if position is None:
+                stop_distance = abs(new_stop - src)
+                if stop_distance > 0:
+                    raw_contracts = risk_dollars / (stop_distance * point_value)
+                    if raw_contracts >= p["min_contracts"]:
+                        qty = min(p["max_contracts"], int(raw_contracts))
+                        fill_price = src - slippage_price
+                        position = dict(direction="short", size=qty, avg_entry=fill_price)
+                        trade_cashflows.append(-p["commission_per_contract"] * qty)
+                    else:
+                        signals_skipped += 1
+                        skipped_stop_distance_sum += stop_distance
+
+        prev_stop = new_stop
+        prev_src = src
+
+    gross_profit = sum(c for c in trade_cashflows if c > 0)
+    gross_loss = -sum(c for c in trade_cashflows if c < 0)
+    net = sum(trade_cashflows)
+    if gross_loss > 0:
+        profit_factor = gross_profit / gross_loss
+    else:
+        profit_factor = float("inf") if gross_profit > 0 else 0.0
+
+    return dict(
+        events=len(trade_cashflows), net_pnl=net,
+        gross_profit=gross_profit, gross_loss=gross_loss,
+        profit_factor=profit_factor,
+        max_drawdown=_max_drawdown(trade_cashflows),
+        signals_total=signals_total,
+        signals_skipped=signals_skipped,
+        avg_skipped_stop_distance=(skipped_stop_distance_sum / signals_skipped) if signals_skipped else 0.0,
+    )
+
+
 STRATEGIES = {
     "crossover": dict(run=run_backtest_crossover, grid=CROSSOVER_GRID, group_by=("fast_len", "slow_len")),
     "orb": dict(run=run_backtest_orb, grid=ORB_GRID, group_by=("adx_threshold",)),
     "meanrev": dict(run=run_backtest_meanrev, grid=MEANREV_GRID, group_by=("use_trend_alignment", "use_obv_confirm")),
     "vwap_pullback": dict(run=run_backtest_vwap_pullback, grid=VWAPPB_GRID, group_by=("adx_low", "adx_high")),
+    "ut_bot": dict(run=run_backtest_ut_bot, grid=UTBOT_GRID, group_by=("key_value",)),
     "scalp": dict(run=run_backtest_scalp, grid=SCALP_GRID, group_by=("target_points", "stop_points")),
     "liquidity_sweep": dict(run=run_backtest_liquidity_sweep, grid=LIQSWEEP_GRID,
                              group_by=("sweep_lookback_4h", "confirm_lookback_1h")),
@@ -1389,6 +1561,11 @@ def main():
     # out-of-sample across multiple settings at a safe risk_pct (up to
     # 5%) - DEAD as designed, not re-running it here. Would need a
     # genuinely different rule set to revisit, not more grid search.
+
+    # ut_bot: brand new, first walk-forward pass. Requested sensitivity
+    # (key_value=2) plus a robustness sweep either side of it (1.0-3.0).
+    # Separate $2,000 cash account, 2% risk per trade.
+    run_for("MNQ=F", "5m", "ut_bot")
 
 
 if __name__ == "__main__":

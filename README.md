@@ -182,15 +182,17 @@ What it does:
    trust** — if profit factor holds above 1.0 there, it's a real signal;
    if it collapses, the in-sample result was noise.
 
-It supports six strategy families (`crossover`, `orb`, `meanrev`,
-`vwap_pullback`, `scalp`, `liquidity_sweep` — see `STRATEGIES` dict in
-the script). `main()` currently runs, MNQ only (MES dropped):
+It supports seven strategy families (`crossover`, `orb`, `meanrev`,
+`vwap_pullback`, `scalp`, `liquidity_sweep`, `ut_bot` — see `STRATEGIES`
+dict in the script). `main()` currently runs, MNQ only (MES dropped):
 - `vwap_pullback` on 5m/15m — the ADX 15-30/1.5x-ATR config keeps holding
   up out-of-sample across re-runs (latest: PF 1.087, 27 trades, $1,201.50
   max drawdown — now under the $1,300 safety budget at default 3/3/9
   sizing on this window) while every tighter-stop variant keeps failing.
   Real signal, needs a fresh TradingView confirmation pass at this
   config — see Pine Script section above and "Position sizing" below.
+- `ut_bot` on 5m — brand new, first walk-forward pass, see "New: UT Bot"
+  below.
 
 `scalp` and `liquidity_sweep` are no longer run by `main()` — both are
 confirmed dead on real data (see their sections above). `meanrev`'s best
@@ -264,6 +266,42 @@ reshuffle lookback windows chasing a positive number from here would be
 curve-fitting, not research — the same mistake this whole project has
 been built to avoid. Revisiting this idea would need a genuinely
 different rule set, not more grid search on this one.
+
+### New: UT Bot (ATR trailing-stop stop-and-reverse, separate $2,000 cash account)
+
+A faithful port of the well-known public "UT Bot Alerts" Pine indicator
+(Kivanç Özbilgiç) — fully mechanical (an ATR-based trailing stop that
+only ever tightens in the position's favor; price crossing it flips the
+position), unlike the ICT/SMC-style discretionary rules that made
+`liquidity_sweep` hard to codify. Entries **and** exits are both driven
+by the same signal per the request that motivated this — no separate
+fixed stop-loss, the reversal itself is the risk control. This is also
+a pivot back toward full automation (buy on Buy signal, sell on Sell
+signal, no manual step) after the earlier decision to trade `vwap_pullback`
+signals manually — a deliberate choice, not scope drift, but worth
+naming since it reverses that decision.
+
+`run_backtest_ut_bot()` in `backtest_optimizer.py` implements this on
+the separate $2,000 cash account (same one `liquidity_sweep` used, not
+the Tradeify prop account): 2% risk per trade, position size (1-5
+contracts) derived from the stop distance at entry, same
+skip-don't-force discipline `liquidity_sweep` needed after its sizing
+bug — a trade is skipped, not forced to 1 contract, when even 1 contract
+would risk more than the budget. Requested sensitivity (`key_value=2`)
+is the default, grid-searched 1.0–3.0 for a robustness check (the same
+reason every other strategy here gets neighborhood-tested instead of
+trusting one hand-picked value).
+
+**Status: brand new, first walk-forward pass pending.** Entry/exit logic
+verified correct via an engineered trend-reversal scenario (same
+standard every strategy here clears before being trusted at all), not
+yet run against real data. **Full auto-execution (PickMyTrade wiring)
+will not be built until this passes the same bar everything else here
+had to clear**: Python walk-forward search, then real TradingView
+Strategy Tester confirmation — including the max-drawdown and Outliers
+PnL checks that killed `meanrev` and caught `vwap_pullback`'s sizing
+problem. Every strategy that skipped straight to looking good before
+that step failed once real data arrived.
 
 ### Position sizing (Tradeify prop account): size from the drawdown budget, not from margin capacity
 
