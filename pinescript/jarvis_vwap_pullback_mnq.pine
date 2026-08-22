@@ -26,29 +26,25 @@
 // OOS PF 0.000) - the fix is reduced size at the original 1.5x ATR
 // stop.
 //
-// SIZING: Python's run_sizing_sweep() suggested base=1/max=3 (PF 1.199,
-// $771.50 net) as the best size fitting the account - but the REAL
-// TradingView result at base=1/max=3 CONTRADICTED that: PF 0.509, net
-// -$2,652.50, a loser. Real data overrides the Python approximation,
-// same as every other time this has happened in this project.
+// SIZING: RESOLVED FOR REAL, confirmed in TradingView (not just Python).
+// The scale-in mechanic was the problem, not the base entries. At
+// base=1/max=3, scaling in reset the stop to a tighter `close - atrVal`
+// (fresh 1x ATR from the current price, not the original 1.5x-ATR entry
+// stop) at the same moment the position got bigger, so a normal
+// pullback (not a real reversal) could stop out the whole enlarged
+// position - real result there was PF 0.509, net -$2,652.50, a loser,
+// even though the base entries alone were profitable (+$1,026 net) in
+// that same test's signal breakdown.
 //
-// The real result's signal breakdown found something specific and
-// useful, not just "no edge": the BASE entries are profitable on their
-// own (PULLBACK LONG +$371.50, PULLBACK SHORT +$654.50 = +$1,026 net)
-// - it's the SCALE-IN adds that lose money (-$3,678.50). Likely cause:
-// scaling in resets the stop to a tighter `close - atrVal` (fresh 1x
-// ATR from the current price, not the original 1.5x-ATR entry stop) at
-// the same moment the position gets bigger, so a normal pullback (not
-// a real reversal) can stop out the whole enlarged position. Outliers
-// PnL on this real test was $0 - the loss is a real, distributed
-// result, not a fake edge propped up by one freak trade, which means
-// this diagnosis is trustworthy.
-//
-// NEXT TEST (no code change needed): set Max Position Size = 1 in the
-// Strategy Tester inputs (same as Base Size) - this structurally
-// disables scale-in entirely, isolating whether the base pullback
-// entries alone hold up cleanly. Defaults below are still base=1/max=3
-// pending that result; may change once it's in.
+// FIX: disable scale-in entirely - base=1, addSize=0, maxSize=1 (the
+// defaults below). CONFIRMED CLEAN in TradingView: PF 1.825, 19 trades,
+// 68.42% win rate, $934.50 net, $443.50 max drawdown (well under both
+// the $1,300 safety budget and the $2,000 hard limit). Outliers PnL was
+// NEGATIVE (-$339.50) - the opposite of an outlier-propped-up result;
+// the ordinary trades did the real work, which is the specific check
+// that killed a different candidate earlier in this project. Sample
+// size (19 trades) is still modest - the paper trading week is what
+// builds real confidence beyond this one confirmation.
 //
 //   15-minute: PF ~1.05 with the corrected inputs above - no real edge.
 //              Kept wired into the auto-timeframe switch below for
@@ -65,10 +61,10 @@
 // status table's "Timeframe" row shows which state you're in. Turn the
 // auto-adjust input off to force the manual inputs on any timeframe.
 //
-// NOT ready for a funded account, and the current sizing default is
-// NOT yet confirmed clean - the base=1/max=3 result above was a real
-// loser. Test Max Position Size = 1 first (see above) before running
-// any paper trading week at the current defaults.
+// Ready for the paper trading week at the base=1/addSize=0/max=1
+// defaults below. Still not ready for a funded account until that week
+// (or several) comes back clean too - one 19-trade confirmation is
+// real, not proof by itself.
 //
 // For the current paper-trading test: load on an MNQ1! chart and
 // connect it to TradingView's own built-in Paper Trading broker (via
@@ -108,8 +104,8 @@ volLen  = input.int(20, "Volume Avg Length")
 volMult = input.float(1.5, "Volume Multiplier")
 
 baseSize = input.int(1, "Base Size (contracts)")
-addSize  = input.int(3, "Scale-In Add Size")
-maxSize  = input.int(3, "Max Position Size (contracts)")
+addSize  = input.int(0, "Scale-In Add Size - 0 disables scale-in (confirmed default, see header)")
+maxSize  = input.int(1, "Max Position Size (contracts) - 1 disables scale-in (confirmed default, see header)")
 
 stopAtrMult    = input.float(1.5, "Stop ATR Multiple (beyond entry)")
 scaleInAtrMult = input.float(1.0, "Scale-In ATR Multiple")
