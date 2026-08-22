@@ -18,14 +18,26 @@
 //   5-minute:  ADX 15-30, trend EMA 10/50,  stop 1.5x ATR
 //   15-minute: ADX 20-40, trend EMA 10/100, stop 2.0x ATR
 //
-// REAL TradingView RESULTS (June 18 - Aug 12 window, 3/3/9 contract
-// sizing):
-//   5-minute:  PF 1.527, 52 trades, $4,928 net - BUT $3,570 max drawdown
-//              against the account's real $2,000 EOD trailing drawdown
-//              limit. Not tradeable at this size as-is - see
-//              backtest_optimizer.py (widened stop_atr_mult grid down to
-//              0.5x, plus a size suggestion in the report) for finding a
-//              config that holds the edge within the real risk budget.
+// REAL TradingView RESULTS (June 18 - Aug 12 window, original 3/3/9
+// contract sizing): PF 1.527, 52 trades, $4,928 net - BUT $3,570 max
+// drawdown against the account's real $2,000 EOD trailing drawdown
+// limit. Not tradeable at that size. Tightening the stop to allow more
+// size was tried and confirmed to NOT work (0.5x ATR broke the edge,
+// OOS PF 0.000) - the fix is reduced size at the original 1.5x ATR
+// stop.
+//
+// SIZING RESOLVED via backtest_optimizer.py's run_sizing_sweep()
+// (tests the confirmed config at explicit sizes on the full ~60-day
+// dataset): base=1/max=3 is the best of the sizes that fit the account
+// - PF 1.199, 83 trades, $771.50 net, $1,077 max drawdown, comfortably
+// under both the $1,300 safety budget and the $2,000 hard limit.
+// base=1/max=2 and base=1/max=4 are also safe but net less profit for
+// similar risk; base=2 or base=3 configs either exceed the safety
+// budget or the hard limit outright. **Defaults below are now set to
+// base=1/max=3** - this is the config to run through TradingView's
+// Paper Trading connection for a real live-data test before ever
+// considering a funded account, not the original 3/3/9.
+//
 //   15-minute: PF ~1.05 with the corrected inputs above - no real edge.
 //              Kept wired into the auto-timeframe switch below for
 //              reference only; entries are DISABLED on 15m charts.
@@ -41,23 +53,30 @@
 // status table's "Timeframe" row shows which state you're in. Turn the
 // auto-adjust input off to force the manual inputs on any timeframe.
 //
-// Still NOT ready for live/demo trading even on 5-minute until the
-// sizing/drawdown question above is resolved - this is the next step,
-// the same process used to confirm (and in MES's case, refute) the
-// mean-reversion strategy.
+// Ready for a PAPER trading test at the base=1/max=3 defaults below -
+// NOT yet ready for a funded account. Two things still unconfirmed
+// before that: (1) real TradingView Strategy Tester result AT this
+// reduced size (the sizing sweep above is the Python approximation,
+// same as everywhere else in this project - always confirm the final
+// candidate for real before trusting it), and (2) this strategy has
+// never been checked for "Outliers PnL" concentration the way a
+// different candidate was and failed - pull that screen after the
+// paper trading week, not just profit factor.
 //
-// This strategy is meant to be run on a TradingView chart (load MNQ1!
-// continuous futures), with its order-fill alerts wired to PickMyTrade
-// (or a similar bridge) to execute on your Tradeify account.
+// For the current paper-trading test: load on an MNQ1! chart and
+// connect it to TradingView's own built-in Paper Trading broker (via
+// the Trading Panel) - no PickMyTrade needed for this, since nothing
+// here should touch real money yet.
 //
-// Do NOT hand-write the webhook JSON yourself — use PickMyTrade's own
-// alert JSON generator in their dashboard and paste that into the
-// TradingView alert message box. See README for the full setup steps.
+// If/when this later moves to a real funded account: order-fill alerts
+// get wired to PickMyTrade (or a similar bridge) to execute on Tradeify.
+// Do NOT hand-write that webhook JSON yourself — use PickMyTrade's own
+// alert JSON generator in their dashboard. See README for setup steps.
 
 strategy("Jarvis VWAP Pullback Trend-Continuation - MNQ",
      overlay = true,
      default_qty_type = strategy.fixed,
-     default_qty_value = 3,
+     default_qty_value = 1,
      pyramiding = 10,
      calc_on_every_tick = false,
      process_orders_on_close = true,
@@ -81,9 +100,9 @@ atrLen  = input.int(14, "ATR Length")
 volLen  = input.int(20, "Volume Avg Length")
 volMult = input.float(1.5, "Volume Multiplier")
 
-baseSize = input.int(3, "Base Size (contracts)")
+baseSize = input.int(1, "Base Size (contracts)")
 addSize  = input.int(3, "Scale-In Add Size")
-maxSize  = input.int(9, "Max Position Size (contracts)")
+maxSize  = input.int(3, "Max Position Size (contracts)")
 
 stopAtrMult    = input.float(1.5, "Stop ATR Multiple (beyond entry)")
 scaleInAtrMult = input.float(1.0, "Scale-In ATR Multiple")

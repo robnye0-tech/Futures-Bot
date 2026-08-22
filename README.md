@@ -28,79 +28,77 @@ $4,928 net** — a real signal. Since then it's kept reconfirming across
 multiple rolling-data re-runs, most recently **PF 1.763 on 29
 out-of-sample trades**, drawdown comfortably under budget.
 
-**Open problem: sizing.** At the tested 3-base/9-max contract sizing,
-real drawdown hit $3,570 against the account's confirmed **$2,000 EOD
-trailing drawdown limit** — not tradeable as sized. Tightening the stop
-to allow more size was tried and **failed** (0.5x ATR broke the edge
-entirely, OOS PF 0.000 — the entries need room). The fix is **reduced
-position size** (roughly 1 base / 3–4 max contracts) at the original
-1.5x ATR stop — this has not yet been re-confirmed in TradingView at
-that size. That's the next real step.
+**Sizing: resolved in Python, pending real confirmation.** At the
+originally-tested 3-base/9-max contract sizing, real drawdown hit
+$3,570 against the account's confirmed **$2,000 EOD trailing drawdown
+limit** — not tradeable as sized. Tightening the stop to allow more
+size was tried and **failed** (0.5x ATR broke the edge entirely, OOS PF
+0.000 — the entries need room). `backtest_optimizer.py`'s
+`run_sizing_sweep()` then tested the confirmed config at seven explicit
+sizes on the full dataset: **base=1/max=3 is the best size that fits
+the account** — PF 1.199, 83 trades, $771.50 net, $1,077 max drawdown,
+comfortably under both the $1,300 safety budget and the $2,000 hard
+limit. Both Pine Scripts now default to base=1/max=3. **Currently
+running a full week on TradingView's Paper Trading connection at this
+size** to get a real (not backtested) read before any funded account.
 
 **Also unresolved:** this strategy has never been checked for the same
 "Outliers PnL" concentration problem that killed a different candidate
 earlier in this project (real profit dominated by a handful of
-oversized trades, not a repeatable per-trade edge). Before trusting
-this strategy for real size, pull up TradingView's Trades Analysis /
-Outliers PnL screen the same way and check win rate + whether outliers
-account for more than the total net profit.
+oversized trades, not a repeatable per-trade edge). Check TradingView's
+Trades Analysis / Outliers PnL screen after the paper trading week —
+win rate, and whether outliers account for more than the total net
+profit — before trusting this for real size.
 
 15-minute has no real edge (PF ~1.05 on real TradingView data) and is
 disabled by default in the Pine scripts via a timeframe-validation gate
 — kept only as a standing comparison in the backtest, not a live option.
 
-## Active setup: signal-only, manual trading
+## Active setup: paper trading test (current step)
 
-Two Pine Scripts implement the same logic, for two different deployment
-models:
+**Current plan**: run `pinescript/jarvis_vwap_pullback_mnq.pine` (the
+`strategy()` version) connected to **TradingView's own built-in Paper
+Trading broker** — not PickMyTrade, not real money — for a full week,
+to get a genuine live-data track record before ever considering a
+funded account.
 
-- **`pinescript/jarvis_vwap_pullback_signals_mnq.pine`** — **the active
-  one.** An `indicator()`, not a `strategy()` — plots LONG/SHORT
-  triangle markers with reference Stop/Target1/Target2 levels, fires
-  TradingView alerts, and does **not** place any orders. You see the
-  signal, decide position size and whether to take it, and manage the
-  trade yourself. No PickMyTrade, no webhook, no broker connection
-  needed.
-- **`pinescript/jarvis_vwap_pullback_mnq.pine`** — the same logic as a
-  `strategy()`, for if the plan ever moves back to full automation. Not
-  currently in use — the decision was made to keep a human in the loop
-  for every entry, since most of this project's real problems (drawdown
-  blowing past account limits, outlier-dependent "edges," sizing bugs)
-  came from testing exactly this kind of auto-execution logic before it
-  was ready.
+1. Open TradingView, load **MNQ1!** continuous futures on a
+   **5-minute** chart (the only timeframe with confirmed edge).
+2. Paste `jarvis_vwap_pullback_mnq.pine` into Pine Editor, add it to the
+   chart. Inputs already default to the confirmed sizing (base=1/max=3
+   — see "The strategy" above) and the correct 5-minute config via
+   "Auto-Adjust Parameters By Chart Timeframe" (on by default).
+3. Open the Trading Panel and connect the strategy to TradingView's
+   Paper Trading account (no PickMyTrade needed for this step — that's
+   only for real execution later).
+4. Let it run untouched for a full week.
+5. At the end, check the same screens every other candidate got checked
+   with: Key Stats (PF, max drawdown), Trades Analysis / Outliers PnL
+   (win rate, whether profit is outlier-dependent). Only after a clean
+   week does a funded account become a reasonable next conversation.
 
-Setup:
+**Alternative, if a human-in-the-loop approach is preferred instead or
+alongside**: `pinescript/jarvis_vwap_pullback_signals_mnq.pine` is an
+`indicator()` version of the same logic — plots LONG/SHORT markers with
+reference Stop/Target1/Target2 levels and fires TradingView alerts
+without placing any orders. Set any alert on it to **"Once Per Bar
+Close"** (not intrabar) — that's what stops the bot (or you) from
+acting on a signal that showed up mid-candle and reversed before the
+bar closed.
 
-1. Open TradingView, load **MNQ1!** continuous futures on a **5-minute**
-   chart (the only timeframe with confirmed edge).
-2. Paste `jarvis_vwap_pullback_signals_mnq.pine` into Pine Editor, add
-   it to the chart as an indicator. "Auto-Adjust Parameters By Chart
-   Timeframe" is on by default and matches the 5-minute config
-   automatically.
-3. Right-click the chart → **Add Alert** → Condition → this indicator →
-   pick "VWAP Pullback Long" or "VWAP Pullback Short" → set to **"Once
-   Per Bar Close"** (not intrabar) → choose your notification method.
-   "Once Per Bar Close" matters: it's what stops the bot (or you) from
-   ever acting on a signal that showed up mid-candle and then reversed
-   before the bar actually closed.
-4. Treat the Stop/Target1/Target2 label as a reference, not gospel —
-   it's the same ATR multiples the backtest uses, but you're the one
-   deciding real size and managing the trade.
+### Moving to a funded account later
 
-### If auto-execution is ever revisited
-
-`jarvis_vwap_pullback_mnq.pine` (the `strategy()` version) plus
-[PickMyTrade](https://pickmytrade.trade/) is the path: load the strategy
-script, adjust inputs (position sizing, ATR multiples, session hours,
-daily kill switch — confirm the real drawdown figure and set the kill
-switch comfortably below it), connect PickMyTrade to Tradeify/Tradovate,
-generate the webhook URL and JSON alert template from PickMyTrade's own
-dashboard (never hand-write that JSON), and wire a TradingView alert on
-the strategy to it. Test in Bar Replay / paper mode and PickMyTrade's
-demo routing before pointing anything at a funded account. Any such
-script must keep `calc_on_every_tick = false` and
-`process_orders_on_close = true` in its `strategy()` declaration — the
-same closed-candle-only requirement as the signal indicator above.
+Once a paper trading week (or several) comes back clean, the path to
+real execution is `jarvis_vwap_pullback_mnq.pine` plus
+[PickMyTrade](https://pickmytrade.trade/): confirm the daily kill switch
+figure, connect PickMyTrade to Tradeify/Tradovate, generate the webhook
+URL and JSON alert template from PickMyTrade's own dashboard (never
+hand-write that JSON), and wire a TradingView alert on the strategy to
+it. Test against PickMyTrade's demo routing before pointing anything at
+a funded account. The strategy keeps `calc_on_every_tick = false` and
+`process_orders_on_close = true` in its declaration regardless of
+deployment target — trades only on a fully closed candle's confirmed
+signal, never an intrabar tick that could still reverse.
 
 ## Parameter tuning: use the optimizer, don't hand-tweak in TradingView
 
@@ -238,16 +236,13 @@ templates/, test_connection.py, requirements.txt
 
 ## Open items
 
-- **Sizing fix needs TradingView re-confirmation** — real result was PF
-  1.527 / 52 trades / $4,928 net but $3,570 max drawdown against the
-  $2,000 limit at 3/3/9 sizing. Tightening the stop was tried and failed
-  (0.5x ATR broke the edge). `backtest_optimizer.py`'s `run_sizing_sweep()`
-  (part of `main()`, runs automatically) tests the confirmed-good config
-  at seven explicit sizes — 1/2, 1/3, 1/4, 2/4, 2/6, 3/6, 3/9 (base/max)
-  — on the full dataset in one pass, flagging which fit the $1,300 safety
-  budget and which exceed the $2,000 hard limit, instead of guessing from
-  linear-scaling math. Re-test whichever size it flags as safe in
-  TradingView to confirm the real numbers agree.
+- **Sizing resolved in Python (base=1/max=3), now running the real
+  paper-trading test** — `run_sizing_sweep()` tested seven explicit
+  sizes on the full dataset: base=1/max=3 is the best that fits the
+  account (PF 1.199, 83 trades, $771.50 net, $1,077 max drawdown).
+  Both Pine Scripts now default to this size. The open step is the real
+  confirmation — a full week on TradingView's Paper Trading connection
+  (see "Active setup" above) — not another Python re-run.
 - **Outlier-dependency check still pending** — this strategy has never
   been checked for the same problem that killed an earlier candidate
   (profit concentrated in a handful of oversized trades, not a real
