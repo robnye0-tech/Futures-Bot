@@ -28,33 +28,43 @@ $4,928 net** — a real signal. Since then it's kept reconfirming across
 multiple rolling-data re-runs, most recently **PF 1.763 on 29
 out-of-sample trades**, drawdown comfortably under budget.
 
-**Sizing: resolved in Python, pending real confirmation.** At the
-originally-tested 3-base/9-max contract sizing, real drawdown hit
-$3,570 against the account's confirmed **$2,000 EOD trailing drawdown
-limit** — not tradeable as sized. Tightening the stop to allow more
-size was tried and **failed** (0.5x ATR broke the edge entirely, OOS PF
-0.000 — the entries need room). `backtest_optimizer.py`'s
-`run_sizing_sweep()` then tested the confirmed config at seven explicit
-sizes on the full dataset: **base=1/max=3 is the best size that fits
-the account** — PF 1.199, 83 trades, $771.50 net, $1,077 max drawdown,
-comfortably under both the $1,300 safety budget and the $2,000 hard
-limit. Both Pine Scripts now default to base=1/max=3. **Currently
-running a full week on TradingView's Paper Trading connection at this
-size** to get a real (not backtested) read before any funded account.
+**Sizing: Python's suggestion was contradicted by real data — the scale-in
+logic is the specific problem.** At the originally-tested 3-base/9-max
+sizing, real drawdown hit $3,570 against the account's confirmed
+**$2,000 EOD trailing drawdown limit** — not tradeable. Tightening the
+stop was tried and **failed** (0.5x ATR broke the edge, OOS PF 0.000).
+`backtest_optimizer.py`'s `run_sizing_sweep()` then suggested base=1/max=3
+(PF 1.199, $771.50 net in Python) — but the **real TradingView result at
+that size was a loser: PF 0.509, net -$2,652.50.** Real data overrides
+the Python approximation, as always.
 
-**Also unresolved:** this strategy has never been checked for the same
-"Outliers PnL" concentration problem that killed a different candidate
-earlier in this project (real profit dominated by a handful of
-oversized trades, not a repeatable per-trade edge). Check TradingView's
-Trades Analysis / Outliers PnL screen after the paper trading week —
-win rate, and whether outliers account for more than the total net
-profit — before trusting this for real size.
+That real result's signal breakdown found something specific, not just
+"no edge": **the base pullback entries are profitable on their own**
+(long +$371.50, short +$654.50 = **+$1,026 net**) — it's the **scale-in
+adds that lose money** (-$3,678.50). Likely cause: scaling in resets the
+stop to a tighter 1x-ATR level from the *current* price at the same
+moment the position gets bigger, so a normal pullback (not a real
+reversal) can stop out the whole enlarged position. Outliers PnL on this
+result was **$0** — a real, distributed loss, not a fake edge propped up
+by one freak trade, so the diagnosis is trustworthy.
+
+**Next test (no code change needed):** set Max Position Size = 1 in the
+Strategy Tester (same as Base Size) — structurally disables scale-in
+entirely, isolating whether the base entries alone hold up cleanly. The
+paper trading plan below is paused pending that result — don't run the
+week at the current base=1/max=3 defaults until this is resolved.
+
+**Also still unresolved:** this strategy has never been checked for the
+same "Outliers PnL" concentration problem that killed a different
+candidate earlier in this project — the base=1/max=3 result above
+happened to come back clean on that specific check ($0 outliers), but a
+different config (e.g. base=1/max=1) needs its own check once tested.
 
 15-minute has no real edge (PF ~1.05 on real TradingView data) and is
 disabled by default in the Pine scripts via a timeframe-validation gate
 — kept only as a standing comparison in the backtest, not a live option.
 
-## Active setup: paper trading test (current step)
+## Active setup: paper trading test (paused pending scale-in fix)
 
 **Current plan**: run `pinescript/jarvis_vwap_pullback_mnq.pine` (the
 `strategy()` version) connected to **TradingView's own built-in Paper
@@ -62,13 +72,21 @@ Trading broker** — not PickMyTrade, not real money — for a full week,
 to get a genuine live-data track record before ever considering a
 funded account.
 
+**Paused before starting the week**: the real TradingView result at the
+current base=1/max=3 defaults was a net loser (see "The strategy"
+above) — the scale-in logic, not the base entries, is the problem.
+Test Max Position Size = 1 in the Strategy Tester first (isolates the
+base entries with no scale-in) before starting the paper trading week —
+no point running a week on a config already shown to lose.
+
 1. Open TradingView, load **MNQ1!** continuous futures on a
    **5-minute** chart (the only timeframe with confirmed edge).
 2. Paste `jarvis_vwap_pullback_mnq.pine` into Pine Editor, add it to the
    chart. Inputs already default to the confirmed sizing (base=1/max=3
    — see "The strategy" above) and the correct 5-minute config via
    "Auto-Adjust Parameters By Chart Timeframe" (on by default).
-3. Open the Trading Panel and connect the strategy to TradingView's
+3. Once a sizing config is confirmed clean, open the Trading Panel and
+   connect the strategy to TradingView's
    Paper Trading account (no PickMyTrade needed for this step — that's
    only for real execution later).
 4. Let it run untouched for a full week.

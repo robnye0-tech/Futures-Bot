@@ -26,17 +26,29 @@
 // OOS PF 0.000) - the fix is reduced size at the original 1.5x ATR
 // stop.
 //
-// SIZING RESOLVED via backtest_optimizer.py's run_sizing_sweep()
-// (tests the confirmed config at explicit sizes on the full ~60-day
-// dataset): base=1/max=3 is the best of the sizes that fit the account
-// - PF 1.199, 83 trades, $771.50 net, $1,077 max drawdown, comfortably
-// under both the $1,300 safety budget and the $2,000 hard limit.
-// base=1/max=2 and base=1/max=4 are also safe but net less profit for
-// similar risk; base=2 or base=3 configs either exceed the safety
-// budget or the hard limit outright. **Defaults below are now set to
-// base=1/max=3** - this is the config to run through TradingView's
-// Paper Trading connection for a real live-data test before ever
-// considering a funded account, not the original 3/3/9.
+// SIZING: Python's run_sizing_sweep() suggested base=1/max=3 (PF 1.199,
+// $771.50 net) as the best size fitting the account - but the REAL
+// TradingView result at base=1/max=3 CONTRADICTED that: PF 0.509, net
+// -$2,652.50, a loser. Real data overrides the Python approximation,
+// same as every other time this has happened in this project.
+//
+// The real result's signal breakdown found something specific and
+// useful, not just "no edge": the BASE entries are profitable on their
+// own (PULLBACK LONG +$371.50, PULLBACK SHORT +$654.50 = +$1,026 net)
+// - it's the SCALE-IN adds that lose money (-$3,678.50). Likely cause:
+// scaling in resets the stop to a tighter `close - atrVal` (fresh 1x
+// ATR from the current price, not the original 1.5x-ATR entry stop) at
+// the same moment the position gets bigger, so a normal pullback (not
+// a real reversal) can stop out the whole enlarged position. Outliers
+// PnL on this real test was $0 - the loss is a real, distributed
+// result, not a fake edge propped up by one freak trade, which means
+// this diagnosis is trustworthy.
+//
+// NEXT TEST (no code change needed): set Max Position Size = 1 in the
+// Strategy Tester inputs (same as Base Size) - this structurally
+// disables scale-in entirely, isolating whether the base pullback
+// entries alone hold up cleanly. Defaults below are still base=1/max=3
+// pending that result; may change once it's in.
 //
 //   15-minute: PF ~1.05 with the corrected inputs above - no real edge.
 //              Kept wired into the auto-timeframe switch below for
@@ -53,15 +65,10 @@
 // status table's "Timeframe" row shows which state you're in. Turn the
 // auto-adjust input off to force the manual inputs on any timeframe.
 //
-// Ready for a PAPER trading test at the base=1/max=3 defaults below -
-// NOT yet ready for a funded account. Two things still unconfirmed
-// before that: (1) real TradingView Strategy Tester result AT this
-// reduced size (the sizing sweep above is the Python approximation,
-// same as everywhere else in this project - always confirm the final
-// candidate for real before trusting it), and (2) this strategy has
-// never been checked for "Outliers PnL" concentration the way a
-// different candidate was and failed - pull that screen after the
-// paper trading week, not just profit factor.
+// NOT ready for a funded account, and the current sizing default is
+// NOT yet confirmed clean - the base=1/max=3 result above was a real
+// loser. Test Max Position Size = 1 first (see above) before running
+// any paper trading week at the current defaults.
 //
 // For the current paper-trading test: load on an MNQ1! chart and
 // connect it to TradingView's own built-in Paper Trading broker (via
