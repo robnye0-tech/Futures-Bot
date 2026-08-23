@@ -41,14 +41,26 @@ stop to a tighter level from the current price at the same moment the
 position got bigger, letting a normal pullback stop out the whole
 enlarged position.
 
-**Fix: disable scale-in entirely — base=1, addSize=0, maxSize=1.**
-Confirmed clean in real TradingView: **PF 1.825, 19 trades, 68.42% win
-rate, $934.50 net, $443.50 max drawdown.** Outliers PnL was **negative**
-(-$339.50) — the opposite of an outlier-propped-up result, the exact
-check that killed a different candidate earlier in this project. Both
-Pine Scripts now default to this config. Sample size (19 trades) is
-still modest, which is exactly what the paper trading week below is
-for.
+**Fix: disable scale-in entirely — addSize=0, maxSize=baseSize.**
+Confirmed clean in real TradingView at base=1: **PF 1.825, 19 trades,
+68.42% win rate, $934.50 net, $443.50 max drawdown.** Outliers PnL was
+**negative** (-$339.50) — the opposite of an outlier-propped-up result,
+the exact check that killed a different candidate earlier in this
+project.
+
+**Current default: base=2, addSize=0, maxSize=2**, also confirmed clean
+over the same date range: **PF 2.272, 32 trades, 81.25% win rate,
+$2,880.50 net, $887.00 max drawdown**, Outliers PnL again negative
+(-$679.00). This is *not* just base=1 doubled — the partial-exit calls
+use `qty_percent = 33`, which rounds to 0 contracts at base=1 (so
+Target 1/2 scale-outs never actually fire at that size, every trade
+rides the raw or breakeven stop) but rounds to a real 1-contract close
+at base=2+ (partial profit-taking actually engages). That's the real
+explanation for why trade count and win rate both moved between the two
+sizes — a genuinely different exit mechanism, not a linear scale-up.
+Both Pine Scripts default to base=2/addSize=0/maxSize=2 now. Sample size
+(32 trades) is still modest, which is exactly what the paper trading
+week below is for.
 
 15-minute has no real edge (PF ~1.05 on real TradingView data) and is
 disabled by default in the Pine scripts via a timeframe-validation gate
@@ -66,7 +78,7 @@ funded account.
    **5-minute** chart (the only timeframe with confirmed edge).
 2. Paste `jarvis_vwap_pullback_mnq.pine` into Pine Editor, add it to the
    chart as a strategy. Inputs already default to the confirmed sizing
-   (base=1, addSize=0, maxSize=1 — see "The strategy" above) and the
+   (base=2, addSize=0, maxSize=2 — see "The strategy" above) and the
    correct 5-minute config via "Auto-Adjust Parameters By Chart
    Timeframe" (on by default) — no inputs need touching.
 3. Open the Trading Panel at the bottom of the chart and connect the
@@ -238,13 +250,17 @@ templates/, test_connection.py, requirements.txt
 ## Open items
 
 - **Sizing and outlier-dependency both resolved and confirmed in real
-  TradingView data** — base=1/addSize=0/max=1 (scale-in fully disabled):
-  PF 1.825, 19 trades, 68.42% win rate, $934.50 net, $443.50 max
-  drawdown, Outliers PnL **negative** (-$339.50 — the opposite of the
-  outlier-propped-up problem that killed an earlier candidate). Both
-  Pine Scripts default to this config. Open step now is the paper
-  trading week (see "Active setup" above) to build real confidence
-  beyond this one 19-trade confirmation, not another sizing question.
+  TradingView data** — current default base=2/addSize=0/max=2 (scale-in
+  disabled, both sizes equal): PF 2.272, 32 trades, 81.25% win rate,
+  $2,880.50 net, $887.00 max drawdown, Outliers PnL **negative**
+  (-$679.00 — the opposite of the outlier-propped-up problem that killed
+  an earlier candidate). base=1/addSize=0/max=1 also confirmed clean
+  separately (PF 1.825, 19 trades, $443.50 max drawdown) — the two sizes
+  aren't linear scalings of each other, since `qty_percent = 33` partial
+  exits only actually fire at base=2+ (see "The strategy" above). Both
+  Pine Scripts default to base=2/addSize=0/max=2. Open step now is the
+  paper trading week (see "Active setup" above) to build real confidence
+  beyond this one 32-trade confirmation, not another sizing question.
 - **Every result is from a single ~60-day backtest window** — see
   "Getting a longer backtest window" above. Treat "held up
   out-of-sample" as promising, not proof, until confirmed on a second,

@@ -61,19 +61,39 @@
 // status table's "Timeframe" row shows which state you're in. Turn the
 // auto-adjust input off to force the manual inputs on any timeframe.
 //
-// Ready for the paper trading week at the base=1/addSize=0/max=1
+// UPDATED DEFAULT: base=2/addSize=0/max=2 (same Jun 28-Aug 21, 2026
+// window as the base=1 confirmation above). Real TradingView result:
+// PF 2.272, 32 trades, 81.25% win rate, $2,880.50 net, $887.00 max
+// drawdown (well under the $1,300 safety budget / $2,000 hard limit),
+// Outliers PnL -$679.00 (negative/clean, same good sign as base=1).
+//
+// IMPORTANT - why base=2 isn't just "base=1 x2": the partial-exit calls
+// below use qty_percent = 33. At base=1, 33% of 1 contract rounds to 0 -
+// the partial scale-out at Target 1/Target 2 never actually fires, so
+// every base=1 trade rides on the raw stop (or the breakeven stop set
+// after a T2 "hit") until it closes. At base=2, 33% of 2 rounds to a
+// real 1-contract close, so partial profit-taking actually engages for
+// the first time. That's a genuinely different exit mechanism, not a
+// bigger dollar version of the same trades - it's the real explanation
+// for why trade count and win rate both moved (19 trades/68.42% at
+// base=1 vs 32 trades/81.25% at base=2), not a fluke or a hidden
+// date-range difference. Worth knowing before assuming any other size
+// scales linearly off either confirmed result.
+//
+// Ready for the paper trading week at the base=2/addSize=0/max=2
 // defaults below. Still not ready for a funded account until that week
-// (or several) comes back clean too - one 19-trade confirmation is
+// (or several) comes back clean too - one 32-trade confirmation is
 // real, not proof by itself.
 //
 // EXPERIMENTAL, OFF BY DEFAULT: "Use Fixed-Point Targets" toggle. The
-// confirmed result above uses ATR-based Target 1/2. This toggle swaps
+// confirmed results above use ATR-based Target 1/2. This toggle swaps
 // those for flat point distances (default 20/40) from entry instead,
-// same for long and short, stop untouched - a hypothesis that a
+// same for long and short, stop untouched - the hypothesis was that a
 // tighter fixed target avoids winners running up past the target and
-// round-tripping into a stopped-out loss. Untested as of this build -
-// A/B it against the confirmed baseline over the identical date range
-// before trusting either the idea or a specific point value.
+// round-tripping into a stopped-out loss. TESTED, DID NOT HELP: real
+// result at base=2 with this on was not an improvement over the ATR
+// targets above. Left in as an off-by-default option for reference,
+// not recommended.
 //
 // For the current paper-trading test: load on an MNQ1! chart and
 // connect it to TradingView's own built-in Paper Trading broker (via
@@ -112,9 +132,9 @@ atrLen  = input.int(14, "ATR Length")
 volLen  = input.int(20, "Volume Avg Length")
 volMult = input.float(1.5, "Volume Multiplier")
 
-baseSize = input.int(1, "Base Size (contracts)")
+baseSize = input.int(2, "Base Size (contracts)")
 addSize  = input.int(0, "Scale-In Add Size - 0 disables scale-in (confirmed default, see header)")
-maxSize  = input.int(1, "Max Position Size (contracts) - 1 disables scale-in (confirmed default, see header)")
+maxSize  = input.int(2, "Max Position Size (contracts) - equal to Base Size disables scale-in (confirmed default, see header)")
 
 stopAtrMult    = input.float(1.5, "Stop ATR Multiple (beyond entry)")
 scaleInAtrMult = input.float(1.0, "Scale-In ATR Multiple")
