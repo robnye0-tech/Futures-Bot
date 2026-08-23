@@ -66,6 +66,15 @@
 // (or several) comes back clean too - one 19-trade confirmation is
 // real, not proof by itself.
 //
+// EXPERIMENTAL, OFF BY DEFAULT: "Use Fixed-Point Targets" toggle. The
+// confirmed result above uses ATR-based Target 1/2. This toggle swaps
+// those for flat point distances (default 20/40) from entry instead,
+// same for long and short, stop untouched - a hypothesis that a
+// tighter fixed target avoids winners running up past the target and
+// round-tripping into a stopped-out loss. Untested as of this build -
+// A/B it against the confirmed baseline over the identical date range
+// before trusting either the idea or a specific point value.
+//
 // For the current paper-trading test: load on an MNQ1! chart and
 // connect it to TradingView's own built-in Paper Trading broker (via
 // the Trading Panel) - no PickMyTrade needed for this, since nothing
@@ -111,6 +120,11 @@ stopAtrMult    = input.float(1.5, "Stop ATR Multiple (beyond entry)")
 scaleInAtrMult = input.float(1.0, "Scale-In ATR Multiple")
 target1AtrMult = input.float(1.0, "Target 1 ATR Multiple")
 target2AtrMult = input.float(2.0, "Target 2 ATR Multiple")
+
+useFixedPointTargets = input.bool(false, "Use Fixed-Point Targets Instead Of ATR Targets (EXPERIMENTAL - untested, see header)",
+     tooltip = "When on, Target 1 / Target 2 become flat point distances from entry (same for long and short) instead of ATR multiples. The stop stays ATR-based either way - this only changes where profit gets taken. Default OFF preserves the confirmed base=1/addSize=0/max=1 result untouched; turn ON to A/B this against that baseline using the exact same backtest date range.")
+target1Points = input.float(20, "Fixed Target 1 Points (only used if the toggle above is on)")
+target2Points = input.float(40, "Fixed Target 2 Points / full exit (only used if the toggle above is on)")
 
 sessionStartHour = input.int(9, "Session Start Hour (ET)")
 sessionStartMin  = input.int(30, "Session Start Minute (ET)")
@@ -315,10 +329,10 @@ if strategy.position_size < 0 and close >= stopPrice
 // ---------------------------------------------------------------------
 // Partial profit taking (always active, regardless of session)
 // ---------------------------------------------------------------------
-target1Long  = lastScalePrice + atrVal * target1AtrMult
-target2Long  = lastScalePrice + atrVal * target2AtrMult
-target1Short = lastScalePrice - atrVal * target1AtrMult
-target2Short = lastScalePrice - atrVal * target2AtrMult
+target1Long  = useFixedPointTargets ? lastScalePrice + target1Points : lastScalePrice + atrVal * target1AtrMult
+target2Long  = useFixedPointTargets ? lastScalePrice + target2Points : lastScalePrice + atrVal * target2AtrMult
+target1Short = useFixedPointTargets ? lastScalePrice - target1Points : lastScalePrice - atrVal * target1AtrMult
+target2Short = useFixedPointTargets ? lastScalePrice - target2Points : lastScalePrice - atrVal * target2AtrMult
 
 if strategy.position_size > 0 and not target2Hit and close >= target2Long
     strategy.close("Long", qty_percent = 33, comment = "SCALE OUT T2")
