@@ -69,11 +69,21 @@ before it ever becomes a live default.
    breakeven that would've gone on to hit T2 - real tradeoff, not an
    obvious win either way.
 
-8. **Trailing stop or faster profit-lock on unusually strong moves** —
-   already on the "maybe" pile from earlier: either let winners run further
-   past the current fixed 2.0x-ATR T2, or lock in an earlier partial when
-   price moves an abnormal amount very quickly. Two different mechanisms,
-   would need to be designed and tested separately.
+8. **Fixed-point profit lock - BUILT as an off-by-default toggle, not yet
+   tested.** `useProfitLock` (default off) places a real resting limit
+   order at a fixed point distance (default 100) from entry on the
+   remaining position, filling intrabar regardless of candle close.
+   Motivated by a real Aug 25, 2026 trade that wicked ~105 points
+   favorable and reversed without ever closing there. Real tradeoff
+   though: the single biggest trade in the confirmed sample (Aug 3, 2026,
+   $3,482.50 on its remaining size, ran 349 points) would have been cut
+   to roughly a third of that under this rule. Needs a real A/B test
+   before ever flipping the toggle on live - see the Pine header for the
+   full comparison.
+   Separately, a **trailing stop** (instead of a fixed lock) that lets
+   winners run further past the current 2.0x-ATR T2 is still just an
+   idea, not built - a different mechanism than the fixed lock above,
+   would need its own design and toggle.
 
 9. **Trade/alert notifications to phone.** Wire TradingView alerts to push
    notification, SMS, or email on every entry/exit so trades are visible in

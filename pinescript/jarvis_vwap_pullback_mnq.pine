@@ -95,6 +95,22 @@
 // targets above. Left in as an off-by-default option for reference,
 // not recommended.
 //
+// EXPERIMENTAL, OFF BY DEFAULT: "Enable Fixed-Point Profit Lock" toggle.
+// Places a real resting limit order (default 100 points from entry) on
+// the remaining position that fills intrabar, independent of candle
+// close - unlike every other exit in this script. Motivated by a real
+// Aug 25, 2026 trade: entry short @ 29,245, price wicked to ~29,140
+// (105 points favorable) but the candle never closed there, so nothing
+// captured it, and the remaining 6 contracts were later stopped out for
+// a loss. A 100-point lock would have turned that into a real win.
+// BUT: the single biggest trade in the confirmed base=8 sample (Aug 3,
+// 2026 - see the trade-count/win-rate section above) rode a breakeven
+// stop for ~4 hours and captured 349 points on its remaining size,
+// netting $3,482.50 alone (a third of that whole test's profit). A flat
+// 100-point lock would have cut that trade's remaining leg short at
+// roughly a third of what it actually made. Real tradeoff, not a clear
+// win - test both ways over the same data before trusting either.
+//
 // HARD RULE, ALWAYS ON: Force Flat Hour/Minute (default 16:59 ET). Any
 // open position is closed outright at that time regardless of stop/
 // target state, and any not-yet-triggered pending setup is cancelled.
@@ -155,6 +171,10 @@ useFixedPointTargets = input.bool(false, "Use Fixed-Point Targets Instead Of ATR
      tooltip = "When on, Target 1 / Target 2 become flat point distances from entry (same for long and short) instead of ATR multiples. The stop stays ATR-based either way - this only changes where profit gets taken. Default OFF preserves the confirmed base=1/addSize=0/max=1 result untouched; turn ON to A/B this against that baseline using the exact same backtest date range.")
 target1Points = input.float(20, "Fixed Target 1 Points (only used if the toggle above is on)")
 target2Points = input.float(40, "Fixed Target 2 Points / full exit (only used if the toggle above is on)")
+
+useProfitLock = input.bool(false, "Enable Fixed-Point Profit Lock - resting order, fills intrabar (EXPERIMENTAL - untested, see header)",
+     tooltip = "Places a real resting limit order at a fixed point distance from entry on the remaining position, independent of candle close - so a strong intrabar move gets captured even if price reverses before the candle confirms it. Real tradeoff: it protects against a wick-and-reverse round trip, but it also caps any trade that would have run further than this many points - see header for the Aug 3 vs Aug 25 2026 comparison that motivated and cautions against this. Default OFF.")
+profitLockPoints = input.float(100, "Profit Lock Points (favorable move from entry, only used if the toggle above is on)")
 
 sessionStartHour = input.int(9, "Session Start Hour (ET)")
 sessionStartMin  = input.int(30, "Session Start Minute (ET)")
@@ -402,6 +422,21 @@ if strategy.position_size < 0 and not target2Hit and close <= target2Short
 else if strategy.position_size < 0 and not target1Hit and close <= target1Short
     strategy.close("Short", qty_percent = 33, comment = "SCALE OUT T1")
     target1Hit := true
+
+// ---------------------------------------------------------------------
+// Fixed-point profit lock (EXPERIMENTAL, off by default) - a real
+// resting limit order on the current remaining size, re-issued each bar
+// so it stays correctly sized after a T1 partial. Fills intrabar, not
+// gated by candle close - unlike everything else in this script, which
+// is deliberately close-only. Safe to do here because a fixed price
+// level isn't a re-evaluated indicator decision, just a static order.
+// ---------------------------------------------------------------------
+if useProfitLock and strategy.position_size > 0
+    strategy.exit("Profit Lock", from_entry = "Long", qty = strategy.position_size,
+         limit = lastScalePrice + profitLockPoints, comment = "PROFIT LOCK")
+if useProfitLock and strategy.position_size < 0
+    strategy.exit("Profit Lock", from_entry = "Short", qty = math.abs(strategy.position_size),
+         limit = lastScalePrice - profitLockPoints, comment = "PROFIT LOCK")
 
 // ---------------------------------------------------------------------
 // On-chart status table
