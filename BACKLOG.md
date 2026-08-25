@@ -7,14 +7,13 @@ this repo: design it, test it (Python walk-forward and/or a controlled
 TradingView A/B), confirm it doesn't regress the current confirmed baseline,
 before it ever becomes a live default.
 
-## Still open, more urgent than "backlog" (do before real money is at risk)
+## Resolved
 
-- **Daily Kill Switch is still a placeholder.** The input `dailyKillUSD`
-  defaults to `900` with a label admitting it's a placeholder. Now that the
-  real $150K account numbers are known ($3,000 daily loss limit, $5,250 EOD
-  trailing drawdown), this needs to become a real, deliberately-chosen number
-  with a safety margin under $3,000 - not the leftover placeholder. This
-  isn't a "someday" item, it's a "before this account goes live" item.
+- ~~Daily Kill Switch was still the `900` placeholder.~~ **Fixed** - now set
+  to `2000`, a real figure with margin under the $150K account's $3,000
+  daily loss limit. Was briefly misconfigured at `3,500` (above the real
+  limit, providing zero protection) before being corrected - worth a habit
+  of double-checking this input any time the account or its limits change.
 
 ## Safety / risk-protection ideas
 
@@ -58,27 +57,39 @@ before it ever becomes a live default.
 
 ## Nice-to-have / performance ideas (not safety-critical)
 
-7. **Trailing stop or faster profit-lock on unusually strong moves** —
+7. **Move stop to breakeven after T1, not just after T2.** Right now in
+   `jarvis_vwap_pullback_mnq.pine`, only the T2 branch does
+   `stopPrice := lastScalePrice` - after a T1 partial, the remaining
+   position still rides the original entry-based stop, not a
+   breakeven-protected one. Confirmed by watching a live trade on Aug 25
+   scrape a marginal +$2 T1 partial while the remaining contracts stayed
+   exposed to the full original stop distance. Worth testing (as a toggle,
+   same pattern as the other experiments) whether moving to breakeven right
+   after T1 improves things or just gets more trades stopped out at
+   breakeven that would've gone on to hit T2 - real tradeoff, not an
+   obvious win either way.
+
+8. **Trailing stop or faster profit-lock on unusually strong moves** —
    already on the "maybe" pile from earlier: either let winners run further
    past the current fixed 2.0x-ATR T2, or lock in an earlier partial when
    price moves an abnormal amount very quickly. Two different mechanisms,
    would need to be designed and tested separately.
 
-8. **Trade/alert notifications to phone.** Wire TradingView alerts to push
+9. **Trade/alert notifications to phone.** Wire TradingView alerts to push
    notification, SMS, or email on every entry/exit so trades are visible in
    real time without watching the chart.
 
-9. **Automated daily/weekly performance log.** Something like
-   `research_runner.py`'s logging pattern, but for actual trade results
-   instead of backtest research runs - a running record of real performance
-   over time, separate from whatever TradingView's own history shows.
+10. **Automated daily/weekly performance log.** Something like
+    `research_runner.py`'s logging pattern, but for actual trade results
+    instead of backtest research runs - a running record of real performance
+    over time, separate from whatever TradingView's own history shows.
 
-10. **Multi-timeframe validation** (already discussed, deliberately not
+11. **Multi-timeframe validation** (already discussed, deliberately not
     started yet): walk-forward test additional timeframes (1m, 3m, 10m,
     30m, 1h) the same rigorous way 5m was validated, before ever enabling
     them in the `tfValidated` gate.
 
-11. **Multi-account scaling within Tradeify.** Once a single account proves
+12. **Multi-account scaling within Tradeify.** Once a single account proves
     out live, replicate across up to 5 Tradeify accounts (per their plan
     limit) for more aggregate capacity - not diversification, since every
     account fires the same signals at the same time (see chat notes on
@@ -86,6 +97,6 @@ before it ever becomes a live default.
     account stays within Tradeify (using the same bot across multiple
     *firms* is against their terms).
 
-12. **ORB + VWAP retest strategy** (`research_orb_retest.py`) - separate
+13. **ORB + VWAP retest strategy** (`research_orb_retest.py`) - separate
     side research track, still fully untested. Not part of this list's
     scope beyond noting it exists and isn't forgotten.

@@ -165,7 +165,7 @@ forceFlatHour   = input.int(16, "Force Flat Hour (ET) - hard close, no exception
 forceFlatMinute = input.int(59, "Force Flat Minute (ET)",
      tooltip = "At this time, any open position is closed immediately regardless of stop/target state, and any pending (not-yet-triggered) setup is cancelled. Keeps every trade's EOD mark-to-market off the account's trailing drawdown calc overnight, and stops a stale pending setup from carrying into the next session day. Runs independently of Session End Hour/Minute above - this is a hard safety cutoff, not a trading-window setting.")
 
-dailyKillUSD = input.float(900, "Daily Kill Switch ($) - placeholder, confirm real Tradeify drawdown figure")
+dailyKillUSD = input.float(2000, "Daily Kill Switch ($) - real figure, confirmed under the $150K account's $3,000 daily loss limit")
 
 autoAdjustByTimeframe = input.bool(true, "Auto-Adjust Parameters By Chart Timeframe",
      tooltip = "When on, ADX band / trend EMA lengths / stop multiple switch automatically based on the chart's timeframe using the configs found in walk-forward + TradingView testing, instead of the manual inputs above. Timeframes without a real confirmed edge (currently: everything except 5-minute) have entries DISABLED even in auto mode - see the 'Timeframe' status row (green = validated, orange = entries disabled). Turn this off to force the manual inputs above on any timeframe (you are then asserting those values yourself).")
