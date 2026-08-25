@@ -48,19 +48,38 @@ Confirmed clean in real TradingView at base=1: **PF 1.825, 19 trades,
 the exact check that killed a different candidate earlier in this
 project.
 
-**Current default: base=2, addSize=0, maxSize=2**, also confirmed clean
-over the same date range: **PF 2.272, 32 trades, 81.25% win rate,
-$2,880.50 net, $887.00 max drawdown**, Outliers PnL again negative
-(-$679.00). This is *not* just base=1 doubled — the partial-exit calls
-use `qty_percent = 33`, which rounds to 0 contracts at base=1 (so
-Target 1/2 scale-outs never actually fire at that size, every trade
-rides the raw or breakeven stop) but rounds to a real 1-contract close
-at base=2+ (partial profit-taking actually engages). That's the real
-explanation for why trade count and win rate both moved between the two
-sizes — a genuinely different exit mechanism, not a linear scale-up.
-Both Pine Scripts default to base=2/addSize=0/maxSize=2 now. Sample size
-(32 trades) is still modest, which is exactly what the paper trading
-week below is for.
+base=2, addSize=0, maxSize=2 was also confirmed clean over the same date
+range: **PF 2.272, 32 trades, 81.25% win rate, $2,880.50 net, $887.00
+max drawdown**, Outliers PnL again negative (-$679.00). This is *not*
+just base=1 doubled — the partial-exit calls use `qty_percent = 33`,
+which rounds to 0 contracts at base=1 (so Target 1/2 scale-outs never
+actually fire at that size, every trade rides the raw or breakeven
+stop) but rounds to a real partial close at base=2+ (partial
+profit-taking actually engages) — a genuinely different exit mechanism
+at each size, not a linear scale-up.
+
+**Current default: base=8, addSize=0, maxSize=8, breakoutWindow=1**
+(tighter than the original 5-bar breakout window). Real TradingView
+result over a later Jul 2–Aug 24, 2026 window (the exact window rolls
+forward over time — see "Getting a longer backtest window" below):
+headline **PF 2.991, "31 trades," 77.42% win rate, $12,385 net, $3,135
+max drawdown** (~60% of the $150K account's $5,250 EOD limit).
+
+**The honest number, reconstructed by hand:** TradingView's "31 trades"
+over-counts real signals, since every partial exit (T1, T2) gets its
+own row. Grouping rows back to actual entries gives **15 independent
+signals, 10 wins / 5 losses = 66.7% win rate** (not 77.42%), signal-level
+PF ≈ 3.07. Two signals alone (Jul 29 and Aug 3, 2026) account for
+**62.9% of all profit** — a real concentration, though the sample stays
+net positive with those two removed (unlike the outlier-dependent
+candidate that got killed earlier in this project). Treat base=8 as
+promising and worth live-testing, not as rigorously walk-forward-tested
+as base=1/base=2 were — it was checked once on the full dataset, not
+grid-searched or robustness-scored.
+
+Both Pine Scripts default to base=8/addSize=0/maxSize=8 now. Sample size
+(15 real signals) is still modest, which is exactly what the paper
+trading week below is for.
 
 15-minute has no real edge (PF ~1.05 on real TradingView data) and is
 disabled by default in the Pine scripts via a timeframe-validation gate
@@ -78,9 +97,9 @@ funded account.
    **5-minute** chart (the only timeframe with confirmed edge).
 2. Paste `jarvis_vwap_pullback_mnq.pine` into Pine Editor, add it to the
    chart as a strategy. Inputs already default to the confirmed sizing
-   (base=2, addSize=0, maxSize=2 — see "The strategy" above) and the
-   correct 5-minute config via "Auto-Adjust Parameters By Chart
-   Timeframe" (on by default) — no inputs need touching.
+   (base=8, addSize=0, maxSize=8, breakoutWindow=1 — see "The strategy"
+   above) and the correct 5-minute config via "Auto-Adjust Parameters By
+   Chart Timeframe" (on by default) — no inputs need touching.
 3. Open the Trading Panel at the bottom of the chart and connect the
    strategy to TradingView's Paper Trading account (no PickMyTrade
    needed for this step — that's only for real execution later).
@@ -238,8 +257,10 @@ pinescript/
   jarvis_vwap_pullback_signals_mnq.pine  # ACTIVE - signal-only indicator, manual trading
   jarvis_vwap_pullback_mnq.pine          # same logic as a strategy() - auto-exec alternative
 
-backtest_optimizer.py  # walk-forward parameter search - run locally
-research_runner.py     # scheduled wrapper that logs backtest_optimizer.py's output
+backtest_optimizer.py    # walk-forward parameter search - run locally
+research_runner.py       # scheduled wrapper that logs backtest_optimizer.py's output
+research_orb_retest.py   # separate, untested side research - see BACKLOG.md
+BACKLOG.md                # safety hardening + nice-to-have ideas, not yet built
 
 strategy.py, config.py, shared_state.py, news_feed.py, dashboard.py,
 templates/, test_connection.py, requirements.txt
@@ -250,17 +271,21 @@ templates/, test_connection.py, requirements.txt
 ## Open items
 
 - **Sizing and outlier-dependency both resolved and confirmed in real
-  TradingView data** — current default base=2/addSize=0/max=2 (scale-in
-  disabled, both sizes equal): PF 2.272, 32 trades, 81.25% win rate,
-  $2,880.50 net, $887.00 max drawdown, Outliers PnL **negative**
-  (-$679.00 — the opposite of the outlier-propped-up problem that killed
-  an earlier candidate). base=1/addSize=0/max=1 also confirmed clean
-  separately (PF 1.825, 19 trades, $443.50 max drawdown) — the two sizes
-  aren't linear scalings of each other, since `qty_percent = 33` partial
-  exits only actually fire at base=2+ (see "The strategy" above). Both
-  Pine Scripts default to base=2/addSize=0/max=2. Open step now is the
-  paper trading week (see "Active setup" above) to build real confidence
-  beyond this one 32-trade confirmation, not another sizing question.
+  TradingView data** — current default base=8/addSize=0/max=8,
+  breakoutWindow=1 (scale-in disabled): headline PF 2.991, "31 trades,"
+  77.42% win rate, $12,385 net, $3,135 max drawdown, Outliers PnL
+  positive this time (+$4,327, unlike the negative results at smaller
+  sizes) — reconstructed by hand into 15 real signals (10W/5L, 66.7% win
+  rate, signal-level PF ≈ 3.07), with 2 signals accounting for 62.9% of
+  total profit. base=1 and base=2 also confirmed clean separately (PF
+  1.825/19 trades and PF 2.272/32 trades respectively) — none of the
+  sizes are linear scalings of each other, since `qty_percent = 33`
+  partial exits behave differently at every size (see "The strategy"
+  above). Both Pine Scripts default to base=8/addSize=0/max=8 now. Open
+  step is the paper trading week (see "Active setup" above) to build
+  real confidence beyond this one dataset - base=8 hasn't had the same
+  walk-forward rigor as the original ADX/EMA/stop parameters, just a
+  single full-history check.
 - **Every result is from a single ~60-day backtest window** — see
   "Getting a longer backtest window" above. Treat "held up
   out-of-sample" as promising, not proof, until confirmed on a second,

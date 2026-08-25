@@ -61,29 +61,47 @@
 // status table's "Timeframe" row shows which state you're in. Turn the
 // auto-adjust input off to force the manual inputs on any timeframe.
 //
-// UPDATED DEFAULT: base=2/addSize=0/max=2 (same Jun 28-Aug 21, 2026
-// window as the base=1 confirmation above). Real TradingView result:
-// PF 2.272, 32 trades, 81.25% win rate, $2,880.50 net, $887.00 max
-// drawdown (well under the $1,300 safety budget / $2,000 hard limit),
-// Outliers PnL -$679.00 (negative/clean, same good sign as base=1).
+// base=2/addSize=0/max=2 was also confirmed clean over the same Jun
+// 28-Aug 21, 2026 window as the base=1 confirmation above: PF 2.272, 32
+// trades, 81.25% win rate, $2,880.50 net, $887.00 max drawdown, Outliers
+// PnL -$679.00 (negative/clean, same good sign as base=1).
 //
-// IMPORTANT - why base=2 isn't just "base=1 x2": the partial-exit calls
-// below use qty_percent = 33. At base=1, 33% of 1 contract rounds to 0 -
-// the partial scale-out at Target 1/Target 2 never actually fires, so
-// every base=1 trade rides on the raw stop (or the breakeven stop set
-// after a T2 "hit") until it closes. At base=2, 33% of 2 rounds to a
-// real 1-contract close, so partial profit-taking actually engages for
-// the first time. That's a genuinely different exit mechanism, not a
-// bigger dollar version of the same trades - it's the real explanation
-// for why trade count and win rate both moved (19 trades/68.42% at
-// base=1 vs 32 trades/81.25% at base=2), not a fluke or a hidden
-// date-range difference. Worth knowing before assuming any other size
-// scales linearly off either confirmed result.
+// IMPORTANT - why base sizes aren't just linear multiples of each other:
+// the partial-exit calls below use qty_percent = 33. At base=1, 33% of 1
+// contract rounds to 0 - the partial scale-out at Target 1/Target 2
+// never actually fires, so every base=1 trade rides on the raw stop (or
+// the breakeven stop set after a T2 "hit") until it closes. At base=2+,
+// 33% rounds to a real partial close, so partial profit-taking actually
+// engages. That's a genuinely different exit mechanism at each size, not
+// a bigger-dollar version of the same trades.
 //
-// Ready for the paper trading week at the base=2/addSize=0/max=2
+// CURRENT LIVE DEFAULT: base=8/addSize=0/max=8, breakoutWindow=1 (down
+// from 5 - tighter breakout confirmation window). Real TradingView
+// result over Jul 2-Aug 24, 2026 (a later, rolling window - Yahoo/
+// TradingView's intraday history only goes back so far, so the exact
+// window shifts forward over time): headline PF 2.991, "31 trades",
+// 77.42% win rate, $12,385 net, $3,135 max drawdown (~60% of this
+// account's $5,250 EOD limit - real, but with less margin than the
+// base=1/base=2 confirmations had).
+//
+// THE HONEST NUMBER: TradingView's "31 trades" over-counts real signals,
+// because every partial exit (T1, T2) gets its own row. Reconstructed by
+// grouping rows back to actual entries: 15 independent signals, 10 wins
+// / 5 losses = 66.7% win rate (not 77.42%), signal-level PF ~3.07. Two
+// signals (Jul 29 and Aug 3, 2026) account for 62.9% of all profit by
+// themselves - a real concentration, not a red flag on the level of the
+// outlier-dependent candidate that got killed earlier in this project
+// (still net positive with those two removed), but this result leans on
+// a small number of strong trending days more than the smaller-size
+// confirmations did. Treat base=8 as promising and live-testing-worthy,
+// not as rigorously walk-forward-confirmed as base=1/base=2 were - it
+// was checked once on the full dataset, not grid-searched or
+// robustness-scored the way the original ADX/EMA/stop parameters were.
+//
+// Ready for the paper trading week at the base=8/addSize=0/max=8
 // defaults below. Still not ready for a funded account until that week
-// (or several) comes back clean too - one 32-trade confirmation is
-// real, not proof by itself.
+// (or several) comes back clean too - this is real data, not proof by
+// itself, especially given the concentration noted above.
 //
 // EXPERIMENTAL, OFF BY DEFAULT: "Use Fixed-Point Targets" toggle. The
 // confirmed results above use ATR-based Target 1/2. This toggle swaps
@@ -152,15 +170,15 @@ adxHigh = input.float(30, "ADX High Bound (trending regime ceiling)")
 trendFastLen = input.int(10, "Trend Fast EMA Length")
 trendSlowLen = input.int(50, "Trend Slow EMA Length")
 
-breakoutWindow = input.int(5, "Breakout Window (bars to wait after rejection candle)")
+breakoutWindow = input.int(1, "Breakout Window (bars to wait after rejection candle)")
 
 atrLen  = input.int(14, "ATR Length")
 volLen  = input.int(20, "Volume Avg Length")
 volMult = input.float(1.5, "Volume Multiplier")
 
-baseSize = input.int(2, "Base Size (contracts)")
+baseSize = input.int(8, "Base Size (contracts)")
 addSize  = input.int(0, "Scale-In Add Size - 0 disables scale-in (confirmed default, see header)")
-maxSize  = input.int(2, "Max Position Size (contracts) - equal to Base Size disables scale-in (confirmed default, see header)")
+maxSize  = input.int(8, "Max Position Size (contracts) - equal to Base Size disables scale-in (confirmed default, see header)")
 
 stopAtrMult    = input.float(1.5, "Stop ATR Multiple (beyond entry)")
 scaleInAtrMult = input.float(1.0, "Scale-In ATR Multiple")
