@@ -129,6 +129,18 @@
 // roughly a third of what it actually made. Real tradeoff, not a clear
 // win - test both ways over the same data before trusting either.
 //
+// HARD RULE, ALWAYS ON: Cumulative Trailing Drawdown Kill Switch
+// (provisional default $4,000 - see the input's own tooltip, this needs
+// a deliberately chosen number, not the placeholder). Tracks a running
+// high-water mark of strategy equity and halts everything, persistently
+// (no daily reset, requires the manual resetCumulativeHalt input) once
+// the drop from that peak reaches the threshold. Built after a real
+// week (Aug 25-28, 2026) where cumulative drawdown climbed to $4,655
+// (88.7% of this account's $5,250 EOD limit) without any single day
+// breaching even the $2,000 daily kill switch then in place - the daily
+// switch structurally cannot catch several smaller losing days
+// compounding, only this one can.
+//
 // HARD RULE, ALWAYS ON: Force Flat Hour/Minute (default 16:59 ET). Any
 // open position is closed outright at that time regardless of stop/
 // target state, and any not-yet-triggered pending setup is cancelled.
@@ -204,6 +216,10 @@ forceFlatMinute = input.int(59, "Force Flat Minute (ET)",
      tooltip = "At this time, any open position is closed immediately regardless of stop/target state, and any pending (not-yet-triggered) setup is cancelled. Keeps every trade's EOD mark-to-market off the account's trailing drawdown calc overnight, and stops a stale pending setup from carrying into the next session day. Runs independently of Session End Hour/Minute above - this is a hard safety cutoff, not a trading-window setting.")
 
 dailyKillUSD = input.float(1500, "Daily Kill Switch ($) - real figure, confirmed under the $150K account's $3,000 daily loss limit")
+
+cumulativeKillUSD = input.float(4000, "Cumulative Trailing Drawdown Kill Switch ($) - PROVISIONAL DEFAULT, confirm before relying on it",
+     tooltip = "Tracks peak-to-current strategy equity (a running high-water mark, updated every bar) and halts all trading once the drop from that peak reaches this amount - unlike the Daily Kill Switch, this persists across days and doesn't reset, mirroring the account's real EOD trailing drawdown risk. Requires manual reset (see below) once triggered. NOTE: this backtest's own drawdown history has already reached $4,655 as normal variance for base=8 sizing - a threshold set below that would halt trading on completely ordinary swings, not just real trouble. Set this deliberately relative to the account's real $5,250 limit, not left at this placeholder.")
+resetCumulativeHalt = input.bool(false, "Reset Cumulative Kill Switch (check this, save, then uncheck to manually clear a triggered halt after reviewing why it fired)")
 
 autoAdjustByTimeframe = input.bool(true, "Auto-Adjust Parameters By Chart Timeframe",
      tooltip = "When on, ADX band / trend EMA lengths / stop multiple switch automatically based on the chart's timeframe using the configs found in walk-forward + TradingView testing, instead of the manual inputs above. Timeframes without a real confirmed edge (currently: everything except 5-minute) have entries DISABLED even in auto mode - see the 'Timeframe' status row (green = validated, orange = entries disabled). Turn this off to force the manual inputs above on any timeframe (you are then asserting those values yourself).")
@@ -309,6 +325,32 @@ if dailyPnl <= -dailyKillUSD and not dailyHalted
     dailyHalted := true
 
 // ---------------------------------------------------------------------
+// Cumulative trailing-drawdown kill switch - catches what the daily one
+// can't: several sub-daily-limit losing days compounding across a week
+// (exactly what happened the week of Aug 25-28, 2026: no single day hit
+// even the old $2,000 daily limit, but the cumulative drawdown climbed
+// to $4,655, 88.7% of this account's real $5,250 EOD trailing limit).
+// Tracks a running high-water mark of strategy equity; once the drop
+// from that peak reaches cumulativeKillUSD, everything halts and STAYS
+// halted (does not reset daily) until resetCumulativeHalt is used.
+// ---------------------------------------------------------------------
+var float peakEquity = na
+var bool  cumulativeHalted = false
+
+if na(peakEquity)
+    peakEquity := strategy.equity
+peakEquity := math.max(peakEquity, strategy.equity)
+
+cumulativeDrawdown = peakEquity - strategy.equity
+
+if cumulativeDrawdown >= cumulativeKillUSD and not cumulativeHalted
+    strategy.close_all(comment = "CUMULATIVE DRAWDOWN KILL SWITCH")
+    cumulativeHalted := true
+
+if resetCumulativeHalt
+    cumulativeHalted := false
+
+// ---------------------------------------------------------------------
 // Force flat by end of day - hard rule, no exceptions. An open position
 // left running past this time would carry unrealized P&L into the
 // account's EOD trailing drawdown calc; flattening beforehand means
@@ -325,7 +367,7 @@ if pastForceFlatTime
         strategy.close_all(comment = "EOD FORCE FLAT")
     pendingDirection := na
 
-canTrade = inSession and not pastForceFlatTime and not dailyHalted and tfValidated
+canTrade = inSession and not pastForceFlatTime and not dailyHalted and not cumulativeHalted and tfValidated
 
 // ---------------------------------------------------------------------
 // Per-position state (reset whenever flat)
@@ -459,7 +501,7 @@ if useProfitLock and strategy.position_size < 0
 // ---------------------------------------------------------------------
 // On-chart status table
 // ---------------------------------------------------------------------
-var table statusTable = table.new(position.top_right, 2, 9, border_width = 1)
+var table statusTable = table.new(position.top_right, 2, 10, border_width = 1)
 if barstate.islast
     table.cell(statusTable, 0, 0, "Timeframe", bgcolor = color.gray, text_color = color.white)
     table.cell(statusTable, 1, 0, tfLabel, bgcolor = color.gray, text_color = tfValidated ? color.green : color.orange)
@@ -484,3 +526,7 @@ if barstate.islast
     table.cell(statusTable, 0, 8, "Stop Price", bgcolor = color.gray, text_color = color.white)
     table.cell(statusTable, 1, 8, na(stopPrice) ? "—" : str.tostring(stopPrice, "#.##"),
          bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 0, 9, "Cum. Drawdown", bgcolor = color.gray, text_color = color.white)
+    table.cell(statusTable, 1, 9, str.tostring(cumulativeDrawdown, "#.##") + " / " + str.tostring(cumulativeKillUSD, "#.##") +
+         (cumulativeHalted ? " (HALTED)" : ""),
+         bgcolor = color.gray, text_color = cumulativeHalted ? color.red : color.white)
