@@ -141,6 +141,20 @@
 // switch structurally cannot catch several smaller losing days
 // compounding, only this one can.
 //
+// HARD RULE: Manual Kill Switch. A plain on/off toggle, off by default -
+// flip it on to close any open position and block all new entries, for
+// known scheduled news (CPI, FOMC, NFP) or any time trading should be
+// fully off. No reset input needed, just switch it back off.
+//
+// Heartbeat (on by default): every 15 minutes, writes to Pine Logs and
+// fires alert() with current position/P&L/drawdown/halt status. Set a
+// TradingView Alert on this script ("Any alert() function call", "Once
+// Per Bar Close") to get it pushed to your phone/email. This is as
+// close to a real log as Pine Script can produce - no filesystem
+// access means no actual log file; Pine Logs (in-editor, while the
+// chart's open) and TradingView's own Alert history are the two real
+// persistent records available.
+//
 // HARD RULE, ALWAYS ON: Force Flat Hour/Minute (default 16:59 ET). Any
 // open position is closed outright at that time regardless of stop/
 // target state, and any not-yet-triggered pending setup is cancelled.
@@ -220,6 +234,12 @@ dailyKillUSD = input.float(1500, "Daily Kill Switch ($) - real figure, confirmed
 cumulativeKillUSD = input.float(4000, "Cumulative Trailing Drawdown Kill Switch ($) - PROVISIONAL DEFAULT, confirm before relying on it",
      tooltip = "Tracks peak-to-current strategy equity (a running high-water mark, updated every bar) and halts all trading once the drop from that peak reaches this amount - unlike the Daily Kill Switch, this persists across days and doesn't reset, mirroring the account's real EOD trailing drawdown risk. Requires manual reset (see below) once triggered. NOTE: this backtest's own drawdown history has already reached $4,655 as normal variance for base=8 sizing - a threshold set below that would halt trading on completely ordinary swings, not just real trouble. Set this deliberately relative to the account's real $5,250 limit, not left at this placeholder.")
 resetCumulativeHalt = input.bool(false, "Reset Cumulative Kill Switch (check this, save, then uncheck to manually clear a triggered halt after reviewing why it fired)")
+
+manualKillSwitch = input.bool(false, "Manual Kill Switch - Halt All Trading",
+     tooltip = "When on, closes any open position immediately and blocks all new entries, regardless of everything else - use for known scheduled events (CPI, FOMC, NFP, etc.) or any time you want the bot fully off. Turn back off to resume normal operation - unlike the other kill switches, this one is just a plain manual toggle, no reset input needed.")
+
+heartbeatEnabled = input.bool(true, "Enable Heartbeat (log + alert every 15 minutes with position/status)",
+     tooltip = "Every 15 minutes, writes a status line to Pine Logs (visible in the editor while the chart is open) and fires an alert() call with the same info - position size, daily P&L, cumulative drawdown, and kill switch state. Set a TradingView Alert on this script with condition 'Any alert() function call', frequency 'Once Per Bar Close', to get it pushed to your phone/email. This is the closest thing to a real log Pine Script can produce - it has no filesystem access, so there's no actual log file, only Pine Logs (in-platform, while the chart's open) and TradingView's own Alert history.")
 
 autoAdjustByTimeframe = input.bool(true, "Auto-Adjust Parameters By Chart Timeframe",
      tooltip = "When on, ADX band / trend EMA lengths / stop multiple switch automatically based on the chart's timeframe using the configs found in walk-forward + TradingView testing, instead of the manual inputs above. Timeframes without a real confirmed edge (currently: everything except 5-minute) have entries DISABLED even in auto mode - see the 'Timeframe' status row (green = validated, orange = entries disabled). Turn this off to force the manual inputs above on any timeframe (you are then asserting those values yourself).")
@@ -351,6 +371,17 @@ if resetCumulativeHalt
     cumulativeHalted := false
 
 // ---------------------------------------------------------------------
+// Manual kill switch - plain toggle for known news events or any time
+// trading should be fully off. Closes any open position the moment it's
+// switched on, no separate reset needed (just switch it back off).
+// ---------------------------------------------------------------------
+if manualKillSwitch and strategy.position_size != 0
+    strategy.close_all(comment = "MANUAL KILL SWITCH")
+
+anyHalted  = manualKillSwitch or cumulativeHalted or dailyHalted
+haltReason = manualKillSwitch ? "MANUAL" : cumulativeHalted ? "CUMULATIVE DD" : dailyHalted ? "DAILY" : "none"
+
+// ---------------------------------------------------------------------
 // Force flat by end of day - hard rule, no exceptions. An open position
 // left running past this time would carry unrealized P&L into the
 // account's EOD trailing drawdown calc; flattening beforehand means
@@ -367,7 +398,7 @@ if pastForceFlatTime
         strategy.close_all(comment = "EOD FORCE FLAT")
     pendingDirection := na
 
-canTrade = inSession and not pastForceFlatTime and not dailyHalted and not cumulativeHalted and tfValidated
+canTrade = inSession and not pastForceFlatTime and not dailyHalted and not cumulativeHalted and not manualKillSwitch and tfValidated
 
 // ---------------------------------------------------------------------
 // Per-position state (reset whenever flat)
@@ -499,6 +530,22 @@ if useProfitLock and strategy.position_size < 0
          limit = lastScalePrice - profitLockPoints, comment = "PROFIT LOCK")
 
 // ---------------------------------------------------------------------
+// Heartbeat - every 15 minutes, log + alert current status so a dropped
+// connection or an unnoticed halt doesn't sit unseen mid-session. Fires
+// on the bar closing each :00/:15/:30/:45 - a natural 15-minute cadence
+// on this 5-minute chart, no extra timer logic needed. Set a
+// TradingView Alert on this script (condition "Any alert() function
+// call", frequency "Once Per Bar Close") to get this pushed out.
+// ---------------------------------------------------------------------
+if heartbeatEnabled and etMinute % 15 == 0
+    heartbeatMsg = "HEARTBEAT " + str.tostring(etHour, "00") + ":" + str.tostring(etMinute, "00") + " ET | " +
+         "Position=" + str.tostring(strategy.position_size) + " | DailyP&L=" + str.tostring(dailyPnl, "#.##") +
+         " | CumDrawdown=" + str.tostring(cumulativeDrawdown, "#.##") + "/" + str.tostring(cumulativeKillUSD, "#.##") +
+         " | Halt=" + haltReason + " | Pending=" + (na(pendingDirection) ? "none" : pendingDirection)
+    log.info(heartbeatMsg)
+    alert(heartbeatMsg, alert.freq_once_per_bar_close)
+
+// ---------------------------------------------------------------------
 // On-chart status table
 // ---------------------------------------------------------------------
 var table statusTable = table.new(position.top_right, 2, 10, border_width = 1)
@@ -508,8 +555,8 @@ if barstate.islast
     table.cell(statusTable, 0, 1, "Daily P&L", bgcolor = color.gray, text_color = color.white)
     table.cell(statusTable, 1, 1, str.tostring(dailyPnl, "#.##"), bgcolor = color.gray, text_color = color.white)
     table.cell(statusTable, 0, 2, "Kill Switch", bgcolor = color.gray, text_color = color.white)
-    table.cell(statusTable, 1, 2, dailyHalted ? "HALTED" : "Active",
-         bgcolor = color.gray, text_color = dailyHalted ? color.red : color.green)
+    table.cell(statusTable, 1, 2, anyHalted ? "HALTED (" + haltReason + ")" : "Active",
+         bgcolor = color.gray, text_color = anyHalted ? color.red : color.green)
     table.cell(statusTable, 0, 3, "Position", bgcolor = color.gray, text_color = color.white)
     table.cell(statusTable, 1, 3, str.tostring(strategy.position_size), bgcolor = color.gray, text_color = color.white)
     table.cell(statusTable, 0, 4, "In Session", bgcolor = color.gray, text_color = color.white)
