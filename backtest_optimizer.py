@@ -301,6 +301,26 @@ def _max_drawdown(trade_cashflows):
 def _simulate(bars, symbol, p, entry_signal_fn):
     """
     entry_signal_fn(i, vol_confirmed) -> ("long" | "short" | None)
+
+    Optional risk-control params (all default to None/disabled, matching
+    every prior use of this function unchanged - only LIVE_CONFIG turns
+    these on, to mirror the actual live Pine script's rules):
+      force_flat_time: (hour, minute) in ET - any open position is closed
+          the moment a bar's time reaches this, same as the Pine script's
+          hard EOD force-flat rule.
+      daily_kill_usd: closes the position and blocks new entries for the
+          rest of the calendar day once that day's mark-to-market P&L
+          drops this far, resetting the next day - mirrors the Daily
+          Kill Switch.
+      cumulative_kill_usd: closes the position once mark-to-market
+          drawdown from the running equity peak reaches this amount.
+      cumulative_kill_persists: if True, blocks all further entries for
+          the rest of the run once cumulative_kill_usd is breached (the
+          intended, persistent-halt design). If False, matches the
+          live script's "Reset Cumulative Kill Switch" checkbox left
+          checked - it still closes the position when breached, but
+          does not block subsequent entries. Only matters if
+          cumulative_kill_usd is set.
     """
     closes = [b["close"] for b in bars]
     volumes = [b["volume"] for b in bars]
@@ -311,6 +331,11 @@ def _simulate(bars, symbol, p, entry_signal_fn):
     point_value = POINT_VALUE[symbol]
     slippage_price = TICK_SIZE[symbol] * p["slippage_ticks"]
 
+    force_flat_time = p.get("force_flat_time")
+    daily_kill_usd = p.get("daily_kill_usd")
+    cumulative_kill_usd = p.get("cumulative_kill_usd")
+    cumulative_kill_persists = p.get("cumulative_kill_persists", False)
+
     position = None
     trade_cashflows = []
 
@@ -319,6 +344,18 @@ def _simulate(bars, symbol, p, entry_signal_fn):
         per_contract = (fill_price - avg_entry) if direction == "long" else (avg_entry - fill_price)
         trade_cashflows.append(per_contract * point_value * qty - p["commission_per_contract"] * qty)
 
+    def close_all_now(price):
+        nonlocal position
+        if position is not None:
+            close_qty(position["direction"], position["size"], price, position["avg_entry"])
+            position = None
+
+    current_day = None
+    day_start_equity = 0.0
+    daily_halted = False
+    peak_equity = 0.0
+    cumulative_halted = False
+
     for i in range(1, len(bars)):
         if atr[i] is None or avg_vol[i] is None:
             continue
@@ -326,7 +363,35 @@ def _simulate(bars, symbol, p, entry_signal_fn):
         dt = bars[i]["dt"]
         price = closes[i]
         vol_confirmed = volumes[i] > avg_vol[i] * p["vol_mult"]
-        can_trade = _in_session(dt, p["session_start"], p["session_end"])
+
+        day = dt.date()
+        if day != current_day:
+            current_day = day
+            day_start_equity = sum(trade_cashflows)
+            daily_halted = False
+
+        unrealized = 0.0
+        if position is not None:
+            per_contract = (price - position["avg_entry"]) if position["direction"] == "long" \
+                else (position["avg_entry"] - price)
+            unrealized = per_contract * point_value * position["size"]
+        current_equity = sum(trade_cashflows) + unrealized
+        peak_equity = max(peak_equity, current_equity)
+
+        if daily_kill_usd is not None and not daily_halted and (current_equity - day_start_equity) <= -daily_kill_usd:
+            close_all_now(price)
+            daily_halted = True
+
+        if cumulative_kill_usd is not None and not cumulative_halted and (peak_equity - current_equity) >= cumulative_kill_usd:
+            close_all_now(price)
+            cumulative_halted = cumulative_kill_persists
+
+        if force_flat_time is not None and (dt.hour, dt.minute) >= force_flat_time:
+            close_all_now(price)
+
+        can_trade = (_in_session(dt, p["session_start"], p["session_end"])
+                     and not daily_halted and not cumulative_halted
+                     and (force_flat_time is None or (dt.hour, dt.minute) < force_flat_time))
 
         if position is not None:
             direction = position["direction"]
@@ -655,15 +720,22 @@ def run_sizing_sweep(symbol="MNQ=F", interval="5m"):
 # jarvis_vwap_pullback_mnq.pine (as of Sept 2026: base=7/addSize=0/
 # max=7, breakoutWindow=1, volMult=1.6 - all live-only adjustments made
 # after the original walk-forward search, never independently tested
-# here until now). This is NOT a grid search or an in/out-of-sample
-# split - it's a single, exact-match run on the full available dataset,
-# meant purely as an independent cross-check: does an untouched Python
-# re-implementation, on Yahoo's data (a different source than
-# TradingView's), agree with what TradingView has been showing? Yahoo's
-# 60-day cap on 5-minute data still applies - this cannot reach back 2
-# years, only as far as Yahoo's API allows, and won't be the exact same
-# 60 days TradingView's own tests have used, which is exactly the point
-# of an independent check.
+# here until now). Also now includes Force Flat (16:59 ET), the Daily
+# Kill Switch ($2,200), and the Cumulative Kill Switch ($4,000,
+# non-persistent - matches the live script's "Reset Cumulative Kill
+# Switch" checkbox currently being left checked) - a first version of
+# this check omitted all three, which let losing positions in the
+# simulation run far past where the real, constrained live script
+# would have force-closed or halted them, overstating how bad a real
+# result would have been. This is NOT a grid search or an in/out-of-
+# sample split - it's a single, exact-match run on the full available
+# dataset, meant purely as an independent cross-check: does an
+# untouched Python re-implementation, on Yahoo's data (a different
+# source than TradingView's), agree with what TradingView has been
+# showing? Yahoo's 60-day cap on 5-minute data still applies - this
+# cannot reach back 2 years, only as far as Yahoo's API allows, and
+# won't be the exact same 60 days TradingView's own tests have used,
+# which is exactly the point of an independent check.
 # ---------------------------------------------------------------------
 LIVE_CONFIG = dict(
     adx_low=15, adx_high=30,
@@ -674,6 +746,10 @@ LIVE_CONFIG = dict(
     scale_in_atr_mult=1.0,
     target1_atr_mult=1.0, target2_atr_mult=2.0,
     base_size=7, add_size=0, max_size=7,
+    force_flat_time=(16, 59),
+    daily_kill_usd=2200,
+    cumulative_kill_usd=4000,
+    cumulative_kill_persists=False,
 )
 
 
