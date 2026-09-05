@@ -650,6 +650,52 @@ def run_sizing_sweep(symbol="MNQ=F", interval="5m"):
               f"max_drawdown=${dd:.2f}{flag}")
 
 
+# ---------------------------------------------------------------------
+# Live config check - runs the EXACT parameters currently live in
+# jarvis_vwap_pullback_mnq.pine (as of Sept 2026: base=7/addSize=0/
+# max=7, breakoutWindow=1, volMult=1.6 - all live-only adjustments made
+# after the original walk-forward search, never independently tested
+# here until now). This is NOT a grid search or an in/out-of-sample
+# split - it's a single, exact-match run on the full available dataset,
+# meant purely as an independent cross-check: does an untouched Python
+# re-implementation, on Yahoo's data (a different source than
+# TradingView's), agree with what TradingView has been showing? Yahoo's
+# 60-day cap on 5-minute data still applies - this cannot reach back 2
+# years, only as far as Yahoo's API allows, and won't be the exact same
+# 60 days TradingView's own tests have used, which is exactly the point
+# of an independent check.
+# ---------------------------------------------------------------------
+LIVE_CONFIG = dict(
+    adx_low=15, adx_high=30,
+    trend_fast_len=10, trend_slow_len=50,
+    breakout_window=1,
+    vol_mult=1.6,
+    stop_atr_mult=1.5,
+    scale_in_atr_mult=1.0,
+    target1_atr_mult=1.0, target2_atr_mult=2.0,
+    base_size=7, add_size=0, max_size=7,
+)
+
+
+def run_live_config_check(symbol="MNQ=F", interval="5m"):
+    print(f"\n{'=' * 70}\nLIVE CONFIG CHECK  |  {symbol}  |  {interval}  |  "
+          f"exact current live settings: {LIVE_CONFIG}\n{'=' * 70}")
+    try:
+        bars = fetch_bars(symbol, interval)
+    except Exception as e:
+        print(f"  Could not fetch data: {type(e).__name__}: {e}")
+        return
+
+    print(f"  Fetched {len(bars)} bars ({bars[0]['dt'].date()} to {bars[-1]['dt'].date()}) - "
+          f"full dataset, no split (Yahoo's 60-day cap on 5m data, not a choice made here)")
+
+    stats = run_backtest_vwap_pullback(bars, symbol, LIVE_CONFIG)
+    dd = stats["max_drawdown"]
+    print(f"  PF={stats['profit_factor']:.3f}  events={stats['events']}  "
+          f"net=${stats['net_pnl']:.2f}  max_drawdown=${dd:.2f}")
+    print(f"  (compare against the $150K account's real $5,250 EOD trailing drawdown limit)")
+
+
 def main():
     # vwap_pullback only. See module docstring for why everything else
     # that used to run here was removed. Still running both 5m/15m each
@@ -663,6 +709,11 @@ def main():
     # actually fits the account" directly instead of via linear-scaling
     # guesses. See function docstring above.
     run_sizing_sweep("MNQ=F", "5m")
+
+    # Independent check of the exact current live settings (base=7,
+    # breakoutWindow=1, volMult=1.6) against Yahoo's data - see function
+    # docstring above.
+    run_live_config_check("MNQ=F", "5m")
 
 
 if __name__ == "__main__":
