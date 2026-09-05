@@ -155,6 +155,19 @@
 // chart's open) and TradingView's own Alert history are the two real
 // persistent records available.
 //
+// EXPERIMENTAL, OFF BY DEFAULT: "Require Close to Confirm Breakout" and
+// "Require Volume on Breakout Bar" toggles. Prompted by watching several
+// live entries reverse almost immediately (Sept 2026). Root cause found
+// in the code, not a hunch: the entry trigger checks the bar's HIGH/LOW
+// against the pending level, not its CLOSE - unlike every other decision
+// in this script (stop, both targets), which deliberately use close
+// only. A bar that wicks through the trigger and closes back on the
+// wrong side still enters today, at that already-reversed close price.
+// Separately, the breakout bar itself never checks volume - only the
+// original rejection candle does. Both toggles are off by default so
+// current live behavior is unchanged; test both ways before trusting
+// either, same as every other experimental option here.
+//
 // HARD RULE, ALWAYS ON: Force Flat Hour/Minute (default 16:59 ET). Any
 // open position is closed outright at that time regardless of stop/
 // target state, and any not-yet-triggered pending setup is cancelled.
@@ -197,6 +210,11 @@ trendFastLen = input.int(10, "Trend Fast EMA Length")
 trendSlowLen = input.int(50, "Trend Slow EMA Length")
 
 breakoutWindow = input.int(1, "Breakout Window (bars to wait after rejection candle)")
+
+useCloseConfirmedBreakout = input.bool(false, "Require Close (not just High/Low) to Confirm Breakout Entry (EXPERIMENTAL - untested, see header)",
+     tooltip = "When on, the entry trigger requires the bar's CLOSE to have crossed the rejection candle's high/low - not just an intrabar wick through it (the current default behavior). Off, a bar that briefly pokes through the trigger level and then closes back on the wrong side still enters, at that already-reversed close price - a plausible cause of entries that reverse almost immediately. On, that same bar would NOT trigger since its close never confirmed the break. Default OFF preserves current behavior; test both ways before trusting either.")
+requireVolumeOnBreakout = input.bool(false, "Require Volume Confirmation On The Breakout Bar Itself (EXPERIMENTAL - untested, see header)",
+     tooltip = "The rejection candle that arms a pending setup already requires above-average volume. The later bar that actually crosses the trigger level currently does NOT - a weak, low-conviction poke through the level counts the same as a strong one. When on, the triggering bar must also satisfy the same volume confirmation. Default OFF preserves current behavior.")
 
 atrLen  = input.int(14, "ATR Length")
 volLen  = input.int(20, "Volume Avg Length")
@@ -428,8 +446,12 @@ if strategy.position_size != 0 and na(lastScalePrice)
 // pending setup too.)
 // ---------------------------------------------------------------------
 if strategy.position_size == 0 and canTrade
+    longTriggerHit  = useCloseConfirmedBreakout ? close >= pendingTrigger : high >= pendingTrigger
+    shortTriggerHit = useCloseConfirmedBreakout ? close <= pendingTrigger : low <= pendingTrigger
+    breakoutVolumeOk = not requireVolumeOnBreakout or volConfirmed
+
     if pendingDirection == "long"
-        if high >= pendingTrigger
+        if longTriggerHit and breakoutVolumeOk
             strategy.entry("Long", strategy.long, qty = baseSize, comment = "PULLBACK LONG")
             lastScalePrice := close
             stopPrice := close - atrVal * effStopAtrMult
@@ -439,7 +461,7 @@ if strategy.position_size == 0 and canTrade
             if pendingBarsLeft <= 0
                 pendingDirection := na
     else if pendingDirection == "short"
-        if low <= pendingTrigger
+        if shortTriggerHit and breakoutVolumeOk
             strategy.entry("Short", strategy.short, qty = baseSize, comment = "PULLBACK SHORT")
             lastScalePrice := close
             stopPrice := close + atrVal * effStopAtrMult
