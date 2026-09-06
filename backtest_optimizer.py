@@ -64,7 +64,7 @@ Strategy Tester before considering it for demo trading.
 
 import itertools
 import statistics
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -772,6 +772,57 @@ def run_live_config_check(symbol="MNQ=F", interval="5m"):
     print(f"  (compare against the $150K account's real $5,250 EOD trailing drawdown limit)")
 
 
+# ---------------------------------------------------------------------
+# Stability check - NOT a search for a parameter that flips the current
+# window positive (that would just be curve-fitting to the exact data
+# in question). This splits the SAME 60-day window into N sequential
+# sub-periods and runs the exact live config on each one separately.
+# A real, broadly-working edge should show up reasonably across most
+# sub-periods, not be entirely dependent on one lucky stretch while the
+# rest bleeds - this checks for that directly, using data already in
+# hand, no new data or waiting required.
+# ---------------------------------------------------------------------
+def run_live_config_stability_check(symbol="MNQ=F", interval="5m", num_chunks=4):
+    print(f"\n{'=' * 70}\nSTABILITY CHECK  |  {symbol}  |  {interval}  |  "
+          f"{num_chunks} sequential sub-periods of the same window, exact live config\n{'=' * 70}")
+    try:
+        bars = fetch_bars(symbol, interval)
+    except Exception as e:
+        print(f"  Could not fetch data: {type(e).__name__}: {e}")
+        return
+
+    start_date = bars[0]["dt"].date()
+    end_date = bars[-1]["dt"].date()
+    total_days = (end_date - start_date).days + 1
+    chunk_days = max(1, total_days // num_chunks)
+
+    profitable_chunks = 0
+    checked_chunks = 0
+    for c in range(num_chunks):
+        chunk_start = start_date + timedelta(days=c * chunk_days)
+        chunk_end = end_date if c == num_chunks - 1 else start_date + timedelta(days=(c + 1) * chunk_days)
+        chunk_bars = [b for b in bars if chunk_start <= b["dt"].date() < chunk_end] if c < num_chunks - 1 \
+            else [b for b in bars if chunk_start <= b["dt"].date() <= chunk_end]
+        if len(chunk_bars) < 100:
+            print(f"  Chunk {c + 1} ({chunk_start} to {chunk_end}): not enough bars, skipping")
+            continue
+
+        stats = run_backtest_vwap_pullback(chunk_bars, symbol, LIVE_CONFIG)
+        checked_chunks += 1
+        verdict = "profitable" if stats["net_pnl"] > 0 else "LOSING"
+        if stats["net_pnl"] > 0:
+            profitable_chunks += 1
+        print(f"  Chunk {c + 1} ({chunk_start} to {chunk_end}): PF={stats['profit_factor']:.3f}  "
+              f"events={stats['events']}  net=${stats['net_pnl']:.2f}  "
+              f"max_drawdown=${stats['max_drawdown']:.2f}  -> {verdict}")
+
+    if checked_chunks:
+        print(f"\n  {profitable_chunks}/{checked_chunks} sub-periods were profitable.")
+        if profitable_chunks <= checked_chunks // 2:
+            print("  Half or fewer sub-periods profitable - NOT consistent with a broadly working edge; "
+                  "looks concentrated in a minority of the window rather than showing up throughout it.")
+
+
 def main():
     # vwap_pullback only. See module docstring for why everything else
     # that used to run here was removed. Still running both 5m/15m each
@@ -790,6 +841,10 @@ def main():
     # breakoutWindow=1, volMult=1.6) against Yahoo's data - see function
     # docstring above.
     run_live_config_check("MNQ=F", "5m")
+
+    # Is the edge concentrated in a lucky stretch, or does it show up
+    # broadly across the window? See function docstring above.
+    run_live_config_stability_check("MNQ=F", "5m")
 
 
 if __name__ == "__main__":
