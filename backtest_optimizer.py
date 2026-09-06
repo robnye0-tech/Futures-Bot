@@ -823,6 +823,92 @@ def run_live_config_stability_check(symbol="MNQ=F", interval="5m", num_chunks=4)
                   "looks concentrated in a minority of the window rather than showing up throughout it.")
 
 
+# ---------------------------------------------------------------------
+# Regime diagnostic - deliberately NOT a trading rule. Measures what the
+# MARKET itself looked like in each of the same sub-periods the
+# stability check just used (average ADX, how much time was actually
+# spent inside the 15-30 "trending" band the strategy requires, ATR as
+# a % of price for a volatility read that's comparable across a
+# multi-week price drift, % of bars meeting the volume filter, and how
+# often the fast/slow trend EMA flips - a rough choppiness read). The
+# point is to see whether the profitable vs losing chunks the stability
+# check found actually look different as MARKET conditions, which would
+# be a genuine, testable hypothesis for later - not to reverse-engineer
+# a filter that happens to separate these exact four chunks, which
+# would just be curve-fitting to the same data already in question.
+# ---------------------------------------------------------------------
+def run_regime_diagnostic(symbol="MNQ=F", interval="5m", num_chunks=4):
+    print(f"\n{'=' * 70}\nREGIME DIAGNOSTIC  |  {symbol}  |  {interval}  |  "
+          f"what the market looked like in each sub-period (descriptive only, not a trading rule)\n{'=' * 70}")
+    try:
+        bars = fetch_bars(symbol, interval)
+    except Exception as e:
+        print(f"  Could not fetch data: {type(e).__name__}: {e}")
+        return
+
+    closes = [b["close"] for b in bars]
+    volumes = [b["volume"] for b in bars]
+    adx = adx_series(bars, 14)
+    atr = atr_series(bars, 14)
+    ema_fast = ema_series(closes, 10)
+    ema_slow = ema_series(closes, 50)
+    avg_vol = sma_series(volumes, 20)
+
+    start_date = bars[0]["dt"].date()
+    end_date = bars[-1]["dt"].date()
+    total_days = (end_date - start_date).days + 1
+    chunk_days = max(1, total_days // num_chunks)
+
+    boundaries = []
+    for c in range(num_chunks):
+        cs = start_date + timedelta(days=c * chunk_days)
+        ce = end_date if c == num_chunks - 1 else start_date + timedelta(days=(c + 1) * chunk_days)
+        boundaries.append((cs, ce, c == num_chunks - 1))
+
+    def chunk_index_for(d):
+        for idx, (cs, ce, is_last) in enumerate(boundaries):
+            if (is_last and cs <= d <= ce) or (not is_last and cs <= d < ce):
+                return idx
+        return None
+
+    stats_by_chunk = [dict(adx_sum=0.0, n=0, in_band=0, atr_pct_sum=0.0,
+                            vol_confirmed=0, flips=0) for _ in range(num_chunks)]
+    prev_trend = None
+
+    for i in range(1, len(bars)):
+        if adx[i] is None or atr[i] is None or avg_vol[i] is None \
+                or ema_fast[i] is None or ema_slow[i] is None:
+            continue
+        idx = chunk_index_for(bars[i]["dt"].date())
+        if idx is None:
+            continue
+        s = stats_by_chunk[idx]
+        s["adx_sum"] += adx[i]
+        s["n"] += 1
+        if 15 <= adx[i] <= 30:
+            s["in_band"] += 1
+        s["atr_pct_sum"] += (atr[i] / closes[i]) * 100
+        if volumes[i] > avg_vol[i] * 1.6:
+            s["vol_confirmed"] += 1
+        trend = "up" if ema_fast[i] > ema_slow[i] else "down"
+        if prev_trend is not None and trend != prev_trend:
+            s["flips"] += 1
+        prev_trend = trend
+
+    for idx, (cs, ce, _) in enumerate(boundaries):
+        s = stats_by_chunk[idx]
+        if s["n"] == 0:
+            print(f"  Chunk {idx + 1} ({cs} to {ce}): no data")
+            continue
+        print(f"  Chunk {idx + 1} ({cs} to {ce}): avg ADX={s['adx_sum'] / s['n']:.1f}  "
+              f"%time in 15-30 band={100 * s['in_band'] / s['n']:.1f}%  "
+              f"avg ATR={s['atr_pct_sum'] / s['n']:.3f}% of price  "
+              f"%bars vol-confirmed={100 * s['vol_confirmed'] / s['n']:.1f}%  "
+              f"trend flips={s['flips']}")
+    print("\n  Compare this against the Stability Check's profitable/losing verdict per chunk - "
+          "look for a real difference in market character, not just eyeball a coincidence.")
+
+
 def main():
     # vwap_pullback only. See module docstring for why everything else
     # that used to run here was removed. Still running both 5m/15m each
@@ -845,6 +931,10 @@ def main():
     # Is the edge concentrated in a lucky stretch, or does it show up
     # broadly across the window? See function docstring above.
     run_live_config_stability_check("MNQ=F", "5m")
+
+    # Descriptive only - does the market itself look different in the
+    # profitable vs losing chunks above? See function docstring above.
+    run_regime_diagnostic("MNQ=F", "5m")
 
 
 if __name__ == "__main__":
