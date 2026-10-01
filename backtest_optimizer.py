@@ -338,11 +338,21 @@ def _simulate(bars, symbol, p, entry_signal_fn):
 
     position = None
     trade_cashflows = []
+    # Additive-only instrumentation (auto-optimize branch): trade_cashflows
+    # mixes P&L-bearing closes with pure-commission opens/scale-ins, so it
+    # can't answer "win rate" or "how many distinct trades" by itself.
+    # closing_cashflows/entry_count track exactly that, in parallel, with
+    # no effect on any existing value (net_pnl/profit_factor/max_drawdown
+    # are computed from trade_cashflows exactly as before).
+    closing_cashflows = []
+    entry_count = 0
 
     def close_qty(direction, qty, price, avg_entry):
         fill_price = price - slippage_price if direction == "long" else price + slippage_price
         per_contract = (fill_price - avg_entry) if direction == "long" else (avg_entry - fill_price)
-        trade_cashflows.append(per_contract * point_value * qty - p["commission_per_contract"] * qty)
+        pnl = per_contract * point_value * qty - p["commission_per_contract"] * qty
+        trade_cashflows.append(pnl)
+        closing_cashflows.append(pnl)
 
     def close_all_now(price):
         nonlocal position
@@ -453,6 +463,7 @@ def _simulate(bars, symbol, p, entry_signal_fn):
                                  last_scale_price=price, stop=stop,
                                  target1_hit=False, target2_hit=False)
                 trade_cashflows.append(-p["commission_per_contract"] * p["base_size"])
+                entry_count += 1
 
     gross_profit = sum(c for c in trade_cashflows if c > 0)
     gross_loss = -sum(c for c in trade_cashflows if c < 0)
@@ -462,11 +473,15 @@ def _simulate(bars, symbol, p, entry_signal_fn):
     else:
         profit_factor = float("inf") if gross_profit > 0 else 0.0
 
+    wins = sum(1 for cf in closing_cashflows if cf > 0)
+    win_rate = wins / len(closing_cashflows) if closing_cashflows else 0.0
+
     return dict(
         events=len(trade_cashflows), net_pnl=net,
         gross_profit=gross_profit, gross_loss=gross_loss,
         profit_factor=profit_factor,
         max_drawdown=_max_drawdown(trade_cashflows),
+        trade_count=entry_count, win_rate=win_rate,
     )
 
 
