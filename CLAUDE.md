@@ -78,3 +78,31 @@ See `orchestrator.py`'s own docstring for exactly how to run it
 the first run - same limitation `backtest_optimizer.py` already
 documents, which is why this has to run on your own machine, not inside
 a sandboxed session).
+
+## Running the search via the leader/builder agents
+
+`.claude/agents/leader.md` and `.claude/agents/builder.md` define two
+Claude Code subagents that drive this same search with judgment instead
+of `orchestrator.py`'s default fixed cycle through all ten parameters.
+
+- **`leader`** decides what to search next, reads `results/log.csv` and
+  `results/summary.md` to judge progress, and declares the search
+  "stable" (or an inconclusive stop) using the heuristic in its own
+  file. It has no `Edit`, `Write`, or `Bash` access - it cannot touch a
+  single file or run a single command itself.
+- **`builder`** does the one thing the leader instructs - `python
+  orchestrator.py --param <name>` or `--finalize-only` - and reports the
+  exact result back. It has `Edit` access, but is instructed to use it
+  only for one narrow, leader-approved exception (widening
+  `orchestrator.py`'s `CANDIDATE_GRID` for a named parameter) and never
+  to hand-edit `strategy_params.py` directly.
+
+This two-agent split is additive on top of everything above, not a
+replacement for it - every rule in this file applies to both agents
+exactly as it applies to a human running `orchestrator.py` by hand. In
+particular: holdout data is still only ever touched via
+`--finalize-only`, once, at the end; neither agent pushes to GitHub
+without the user doing it themselves; and both inherit the same
+forbidden-file list in rule 5. Invoke the leader with `claude --agent
+leader` (or let Claude Code route to it by description) from this
+repo's root on the `auto-optimize` branch.
